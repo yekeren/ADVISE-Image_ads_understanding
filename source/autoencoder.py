@@ -35,13 +35,15 @@ class AutoEncoder(object):
     self._use_batch_norm = config['use_batch_norm']
     self._scope = config.get('scope', 'autoencoder')
     self._reconstruction_loss = config['reconstruction_loss']
+    self._n_hidden_layers = config['n_hidden_layers']
 
-  def build(self, inputs, is_training=True):
+  def build(self, inputs, is_training=True, reuse=False):
     """Build autoencoder model.
 
     Args:
       inputs: a [batch, n_dims] tensor denoting inputs.
       is_training: whether or not the layer is in training mode.
+      reuse: whether or not the weights could be reused.
 
     Returns:
       hidden: a [batch, n_hidden] tensor.
@@ -75,13 +77,24 @@ class AutoEncoder(object):
         normalizer_params=normalizer_params):
 
       with tf.variable_scope(self._scope):
-        hidden = slim.fully_connected(inputs, 
+        node = inputs
+        node = slim.fully_connected(node, 
             num_outputs=self._n_hidden,
-            activation_fn=None,
-            scope='encoder/hidden')
+            activation_fn=tf.nn.relu6,
+            reuse=reuse,
+            scope='encoder/hidden_0')
+        for i in xrange(1, self._n_hidden_layers):
+          node_residual = slim.fully_connected(node, 
+              num_outputs=self._n_hidden,
+              activation_fn=tf.nn.relu6,
+              reuse=reuse,
+              scope='encoder/hidden_%d' % (i))
+          node = node + node_residual
+        hidden = node
         reconstruction = slim.fully_connected(hidden,
             num_outputs=n_input,
-            activation_fn=tf.nn.relu,
+            activation_fn=tf.nn.relu6,
+            reuse=reuse,
             scope='decoder/reconstruction')
 
     tf.summary.histogram('autoencoder/hidden', hidden)

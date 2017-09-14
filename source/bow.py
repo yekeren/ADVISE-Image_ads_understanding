@@ -24,13 +24,20 @@ class BOW(object):
     self._weight_decay = config['weight_decay']
     self._keep_prob = config['keep_prob']
 
-  def build_weights(self):
-    """Build embedding matrix."""
+  def build_weights(self, reuse=False):
+    """Build embedding matrix.
+
+    Args:
+      reuse: whether or not the variables could be reused.
+
+    Returns:
+      embedding_weights: a [vocab_size, embedding_size] tensor.
+    """
     init_width = 0.08
     initializer = tf.random_uniform_initializer(-init_width, init_width)
     tf.logging.info('init_width of embedding_weights: %.3lf', init_width)
 
-    with tf.variable_scope('BOW'):
+    with tf.variable_scope('BOW', reuse=reuse):
       embedding_weights = tf.get_variable(
           name='weights', 
           shape=[self._vocab_size, self._embedding_size], 
@@ -38,13 +45,15 @@ class BOW(object):
           regularizer=slim.l2_regularizer(self._weight_decay))
     return embedding_weights
 
-  def build(self, caption_lengths, caption_strings, is_training=True):
+  def build(self, caption_lengths, caption_strings, 
+      is_training=True, reuse=False):
     """Build bag of word model.
 
     Args:
       caption_lengths: a [batch] tensor indicating lenghts of each caption.
       caption_strings: a [batch, max_caption_len] tensor indicating multiple captions.
       is_training: whether or not the layer is in training mode.
+      reuse: whether or not the variables could be reused.
 
     Returns:
       embeddings_averaged: a [batch, embedding_size] tensor indicating feature representations.
@@ -53,19 +62,7 @@ class BOW(object):
     """
     batch_size, max_caption_len = caption_strings.get_shape().as_list()
 
-    # init_width = 0.08
-    # initializer = tf.random_uniform_initializer(-init_width, init_width)
-    # tf.logging.info('init_width of embedding_weights: %.3lf', init_width)
-    #
-    # Embed captions.
-    # with tf.variable_scope('BOW'):
-    #   embedding_weights = tf.get_variable(
-    #       name='weights', 
-    #       shape=[self._vocab_size, self._embedding_size], 
-    #       initializer=initializer,
-    #       regularizer=slim.l2_regularizer(self._weight_decay))
-
-    embedding_weights = self.build_weights()
+    embedding_weights = self.build_weights(reuse=reuse)
     embeddings = tf.nn.embedding_lookup(embedding_weights, caption_strings)
     if is_training:
       embeddings = tf.nn.dropout(embeddings, self._keep_prob)
