@@ -27,6 +27,8 @@ def _create_tfrecord_dataset(config):
         shape=(), dtype=tf.string, default_value=''),
     'image/encoded': tf.FixedLenFeature((), tf.string, default_value=''),
     'image/format': tf.FixedLenFeature((), tf.string, default_value='jpeg'),
+    'topic/topic_id': tf.FixedLenFeature(
+        shape=(), dtype=tf.int64, default_value=0),
     'caption/num_captions': tf.FixedLenFeature(shape=(), dtype=tf.int64),
     'caption/caption_lengths': tf.FixedLenFeature(
         shape=[config.max_num_captions], dtype=tf.int64),
@@ -37,6 +39,7 @@ def _create_tfrecord_dataset(config):
     'image_id': tfexample_decoder.Tensor('image/source_id'),
     'image': tfexample_decoder.Image(
         shape=[config.image_height, config.image_width, 3]),
+    'topic_id': tfexample_decoder.Tensor('topic/topic_id'),
     'num_captions': tfexample_decoder.Tensor('caption/num_captions'),
     'caption_lengths': tfexample_decoder.Tensor('caption/caption_lengths'),
     'caption_strings': tfexample_decoder.Tensor('caption/caption_strings'),
@@ -87,6 +90,7 @@ def get_examples(config):
     tensor_dict: a dictionary mapping data names to tensors.
       'image_id':          tf.string,  [batch]
       'image':             tf.uint8    [batch, height, width, 3]
+      'topic_id':          tf.int64,   [batch]
       'num_captions':      tf.int64,   [batch]
       'caption_lengths':   tf.int64,   [batch, max_num_captions]
       'caption_strings':   tf.int64,   [batch, max_num_captions, max_caption_len]
