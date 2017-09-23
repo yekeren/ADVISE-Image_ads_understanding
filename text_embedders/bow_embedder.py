@@ -13,11 +13,13 @@ slim = tf.contrib.slim
 
 class BOWEmbedder(TextEmbedder):
 
-  def __init__(self, vocab_size, embedding_size, keep_prob, weight_decay):
-    self._vocab_size = vocab_size
-    self._embedding_size = embedding_size
-    self._keep_prob = keep_prob
-    self._weight_decay = weight_decay
+  def __init__(self, model_proto):
+    """Initializes BOWEmbedder.
+
+    Args:
+      model_proto: an instance of BOWEmbedder proto.
+    """
+    self._model_proto = model_proto
 
   @property
   def scope(self):
@@ -36,13 +38,15 @@ class BOWEmbedder(TextEmbedder):
       embeddings: a [batch, embedding_size] tensor indicating embedding vectors
         of text_strings.
     """
+    model_proto = self._model_proto
+
     embedding_weights = self.build_weights(
-        vocab_size=self._vocab_size,
-        embedding_size=self._embedding_size,
-        weight_decay=self._weight_decay)
+        vocab_size=model_proto.vocab_size,
+        embedding_size=model_proto.embedding_size,
+        weight_decay=model_proto.weight_decay)
     embeddings = tf.nn.embedding_lookup(embedding_weights, text_strings)
     if is_training:
-      embeddings = tf.nn.dropout(embeddings, self._keep_prob)
+      embeddings = tf.nn.dropout(embeddings, model_proto.keep_prob)
 
     # Average embeddings by weights to get the representation of each string.
     batch_size, max_text_len = text_strings.get_shape().as_list()

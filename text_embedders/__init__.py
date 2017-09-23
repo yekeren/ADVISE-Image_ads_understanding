@@ -1,1 +1,4 @@
-__all__ = ['bow_embedder']
+__all__ = [
+  'bow_embedder', 
+  'builder'
+]

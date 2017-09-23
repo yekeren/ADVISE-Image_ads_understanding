@@ -12,10 +12,19 @@ slim = tf.contrib.slim
 class TextEmbedder(object):
   __metaclass__ = abc.ABCMeta
 
+  def __init__(self, config):
+    """Initializes TextEmbedder."""
+    pass
+
   @abc.abstractproperty
   def scope(self):
     """Returns variable scope."""
     pass
+
+  @property
+  def embedding_weights(self):
+    """Returns embedding weights."""
+    return self._embedding_weights
 
   @abc.abstractmethod
   def embed(self, text_lengths, text_strings, is_training=True):
@@ -47,4 +56,5 @@ class TextEmbedder(object):
           shape=[vocab_size, embedding_size], 
           initializer=initializer,
           regularizer=slim.l2_regularizer(weight_decay))
+    self._embedding_weights = embedding_weights
     return embedding_weights
