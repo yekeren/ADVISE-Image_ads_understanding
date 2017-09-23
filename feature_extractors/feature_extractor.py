@@ -12,9 +12,18 @@ slim = tf.contrib.slim
 class FeatureExtractor(object):
   __metaclass__ = abc.ABCMeta
 
+  def __init__(self, config):
+    """Initializes feature extractor."""
+    pass
+
   @abc.abstractproperty
   def scope(self):
     """Returns variable scope."""
+    pass
+
+  @abc.abstractproperty
+  def default_image_size(self):
+    """Returns default image size."""
     pass
 
   @abc.abstractmethod
@@ -22,7 +31,7 @@ class FeatureExtractor(object):
     """Extracts feature vectors.
 
     Args:
-      image: a [batch, height, width, 3] tensor denoting image.
+      image: a [batch, height, width, 3] float32 tensor denoting image.
       is_training: if True, update batch norm parameters.
 
     Returns:
