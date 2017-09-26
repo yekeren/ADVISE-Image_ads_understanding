@@ -4,7 +4,6 @@ from __future__ import division
 from __future__ import print_function
 
 import tensorflow as tf
-from nets import mobilenet_v1
 
 from protos import ads_emb_model_pb2
 from text_embedders.text_embedder import TextEmbedder
@@ -34,7 +33,7 @@ class RNNEmbedder(TextEmbedder):
   @property
   def scope(self):
     """Returns variable scope."""
-    return 'RNN'
+    return self._model_proto.scope
 
   def embed(self, text_lengths, text_strings, is_training=True):
     """Embeds texts into embedding vectors.

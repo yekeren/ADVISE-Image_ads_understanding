@@ -4,8 +4,8 @@ from __future__ import division
 from __future__ import print_function
 
 import tensorflow as tf
-from nets import mobilenet_v1
 
+from protos import ads_emb_model_pb2
 from text_embedders.text_embedder import TextEmbedder
 
 slim = tf.contrib.slim
@@ -19,12 +19,14 @@ class BOWEmbedder(TextEmbedder):
     Args:
       model_proto: an instance of BOWEmbedder proto.
     """
+    if not isinstance(model_proto, ads_emb_model_pb2.BOWEmbedder):
+      raise ValueError('model_proto has to be an instance of BOWEmbedder.')
     self._model_proto = model_proto
 
   @property
   def scope(self):
     """Returns variable scope."""
-    return 'BOW'
+    return self._model_proto.scope
 
   def embed(self, text_lengths, text_strings, is_training=True):
     """Embeds texts into embedding vectors.

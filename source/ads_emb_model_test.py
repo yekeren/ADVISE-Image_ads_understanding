@@ -12,10 +12,11 @@ from google.protobuf import text_format
 from utils import vis
 
 import object_detection
-import ads_emb_model_pb2
+from protos import ads_emb_model_pb2
 import feature_extractors
 import text_embedders
 from ads_emb_model import AdsEmbModel
+from ads_emb_model import mine_hard_examples
 
 slim = tf.contrib.slim
 
@@ -45,7 +46,7 @@ class AdsEmbModelTest(tf.test.TestCase):
         }
       }
       feature_extractor_checkpoint: "./models/zoo/mobilenet_v1_1.0_224/mobilenet_v1_1.0_224.ckpt"
-      text_embedder {
+      caption_embedder {
         bow_embedder {
           vocab_size: 10000
         }
@@ -208,7 +209,7 @@ class AdsEmbModelTest(tf.test.TestCase):
           inception_v4_extractor {
           }
         }
-        text_embedder {
+        caption_embedder {
           bow_embedder {
             vocab_size: 10000
           }
@@ -349,43 +350,43 @@ class AdsEmbModelTest(tf.test.TestCase):
     with tf.Graph().as_default():
       model_proto = ads_emb_model_pb2.AdsEmbModel()
       text_format.Merge(self._default_proto_text, model_proto)
-      model_proto.text_embedder.bow_embedder.vocab_size = 1000
-      model_proto.text_embedder.bow_embedder.embedding_size = 100
+      model_proto.caption_embedder.bow_embedder.vocab_size = 1000
+      model_proto.caption_embedder.bow_embedder.embedding_size = 100
 
       model = AdsEmbModel(model_proto)
-      self.assertIsInstance(model.text_embedder,
+      self.assertIsInstance(model.caption_embedder,
           text_embedders.bow_embedder.BOWEmbedder)
 
       caption_lengths = tf.placeholder(shape=[4], dtype=tf.int64)
       caption_strings = tf.placeholder(shape=[4, 5], dtype=tf.int64)
 
-      embs = model.text_embedder.embed(caption_lengths, caption_strings)
+      embs = model.caption_embedder.embed(caption_lengths, caption_strings)
       self.assertEqual(embs.get_shape().as_list(), [4, 100])
       self.assertEqual(
-          model.text_embedder.embedding_weights.get_shape().as_list(),
+          model.caption_embedder.embedding_weights.get_shape().as_list(),
           [1000, 100])
 
     # vocab_size: 999, embedding_size: 99
     with tf.Graph().as_default():
       model_proto = ads_emb_model_pb2.AdsEmbModel()
       text_format.Merge(self._default_proto_text, model_proto)
-      model_proto.text_embedder.bow_embedder.vocab_size = 999
-      model_proto.text_embedder.bow_embedder.embedding_size = 99
+      model_proto.caption_embedder.bow_embedder.vocab_size = 999
+      model_proto.caption_embedder.bow_embedder.embedding_size = 99
 
       model = AdsEmbModel(model_proto)
-      self.assertIsInstance(model.text_embedder,
+      self.assertIsInstance(model.caption_embedder,
           text_embedders.bow_embedder.BOWEmbedder)
 
       caption_lengths = tf.placeholder(shape=[3], dtype=tf.int64)
       caption_strings = tf.placeholder(shape=[3, 5], dtype=tf.int64)
 
-      embs = model.text_embedder.embed(caption_lengths, caption_strings)
+      embs = model.caption_embedder.embed(caption_lengths, caption_strings)
       self.assertEqual(embs.get_shape().as_list(), [3, 99])
       self.assertEqual(
-          model.text_embedder.embedding_weights.get_shape().as_list(),
+          model.caption_embedder.embedding_weights.get_shape().as_list(),
           [999, 99])
 
-  def test_build_text_model(self):
+  def test_build_caption_model(self):
     model_proto = ads_emb_model_pb2.AdsEmbModel()
     text_format.Merge(self._default_proto_text, model_proto)
 
@@ -396,7 +397,7 @@ class AdsEmbModelTest(tf.test.TestCase):
       caption_lengths = tf.placeholder(shape=[3], dtype=tf.int64)
       caption_strings = tf.placeholder(shape=[3, 5], dtype=tf.int64)
 
-      caption_embs, assign_fn = model.build_text_model(
+      caption_embs, assign_fn = model.build_caption_model(
           caption_lengths, caption_strings, is_training=False) 
       invalid_tensor_names = tf.report_uninitialized_variables()
 
@@ -405,6 +406,30 @@ class AdsEmbModelTest(tf.test.TestCase):
       invalid_tensor_names = sess.run(invalid_tensor_names)
       for name in invalid_tensor_names:
         self.assertTrue('BOW/' in name)
+
+  def test_mine_hard(self):
+    g = tf.Graph()
+    with g.as_default():
+      categories = tf.placeholder(shape=[None], dtype=tf.int64)
+      pos_indices, neg_indices = mine_hard_examples(categories)
+
+    with self.test_session(graph=g) as sess:
+      # Case 1.
+      pos, neg = sess.run([pos_indices, neg_indices],
+          feed_dict={categories: np.array([0, 1, 2, 0, 2])})
+      self.assertAllEqual(pos, 
+          np.array([1, 1, 2, 4]))
+      self.assertAllEqual(neg, 
+          np.array([2, 4, 1, 1]))
+
+      # Case 2.
+      pos, neg = sess.run([pos_indices, neg_indices],
+          feed_dict={categories: np.array([1, 3, 0, 2, 3, 4])})
+      self.assertAllEqual(pos, np.array([0, 0, 0, 0, 1, 1, 1, 3, 3, 3, 3, 4,
+            4, 4, 5, 5, 5, 5]))
+      self.assertAllEqual(neg, np.array([1, 3, 4, 5, 0, 3, 5, 0, 1, 4, 5, 0,
+            3, 5, 0, 1, 3, 4]))
+
 
 if __name__ == '__main__':
     tf.test.main()
