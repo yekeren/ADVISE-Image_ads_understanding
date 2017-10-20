@@ -9,11 +9,11 @@ import tensorflow as tf
 slim = tf.contrib.slim
 
 
-class TextEmbedder(object):
+class TextEncoder(object):
   __metaclass__ = abc.ABCMeta
 
   def __init__(self, config):
-    """Initializes TextEmbedder."""
+    """Initializes TextEncoder."""
     pass
 
   @abc.abstractproperty
@@ -27,8 +27,8 @@ class TextEmbedder(object):
     return self._embedding_weights
 
   @abc.abstractmethod
-  def embed(self, text_lengths, text_strings, is_training=True):
-    """Embeds texts into embedding vectors.
+  def encode(self, text_lengths, text_strings, is_training=True):
+    """Encodes texts into embedding vectors.
 
     Args:
       text_lengths: a [batch] tensor indicating lenghts of each text.
@@ -37,24 +37,35 @@ class TextEmbedder(object):
     """
     pass
 
-  def build_weights(self, vocab_size, embedding_size, weight_decay=0.0):
+  @abc.abstractmethod
+  def assign_from_checkpoint_fn(self, checkpoint_path):
+    """Returns a function to load from checkpoint.
+
+    Args:
+      checkpoint_path: path to the checkpoint file.
+
+    Returns:
+      assign_fn: a function that that load weights from checkpoint.
+    """
+    pass
+
+  def build_weights(self, vocab_size, embedding_size, 
+      init_width=0.08, weight_decay=0.0):
     """Builds word embedding matrix.
 
     Args:
       vocab_size: size of vocabulary.
       embedding_size: dimensions of embedding vector.
+      init_width: init width of word embedding.
       weight_decay: weight decay of word embedding weights.
 
     Returns:
       embedding_weights: a [vocab_size, embedding_size] tensor.
     """
-    initializer = tf.random_uniform_initializer(-0.08, 0.08)
-
     with tf.variable_scope(self.scope):
-      embedding_weights = tf.get_variable(
+      self._embedding_weights = tf.get_variable(
           name='weights', 
           shape=[vocab_size, embedding_size], 
-          initializer=initializer,
+          initializer=tf.random_uniform_initializer(-init_width, init_width),
           regularizer=slim.l2_regularizer(weight_decay))
-    self._embedding_weights = embedding_weights
-    return embedding_weights
+    return self._embedding_weights

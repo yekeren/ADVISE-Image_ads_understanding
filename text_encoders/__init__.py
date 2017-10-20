@@ -1,4 +1,6 @@
 __all__ = [
-  'bow_embedder', 
+  'text_encoder', 
+  'bow_encoder', 
+  'rnn_encoder', 
   'builder'
 ]

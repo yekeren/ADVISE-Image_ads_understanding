@@ -5,25 +5,25 @@ from __future__ import print_function
 
 import tensorflow as tf
 
-from protos import ads_emb_model_pb2
-from text_embedders.text_embedder import TextEmbedder
+from protos import text_encoders_pb2
+from text_encoders.text_encoder import TextEncoder
 
 slim = tf.contrib.slim
 
 
-class RNNEmbedder(TextEmbedder):
+class RNNEncoder(TextEncoder):
 
   def __init__(self, model_proto):
-    """Initializes RNNEmbedder.
+    """Initializes RNNEncoder.
 
     Args:
-      model_proto: an instance of RNNEmbedder proto.
+      model_proto: an instance of RNNEncoder proto.
 
     Raises:
       ValueError: if model_proto is invalid.
     """
-    if not isinstance(model_proto, ads_emb_model_pb2.RNNEmbedder):
-      raise ValueError('model_proto has to be an instance of RNNEmbedder.')
+    if not isinstance(model_proto, text_encoders_pb2.RNNEncoder):
+      raise ValueError('model_proto has to be an instance of RNNEncoder.')
 
     if model_proto.cell_type != 'LSTM':
       raise ValueError('Only LSTM is supported.')
@@ -35,8 +35,19 @@ class RNNEmbedder(TextEmbedder):
     """Returns variable scope."""
     return self._model_proto.scope
 
-  def embed(self, text_lengths, text_strings, is_training=True):
-    """Embeds texts into embedding vectors.
+  def assign_from_checkpoint_fn(self, checkpoint_path):
+    """Returns a function to load from checkpoint.
+
+    Args:
+      checkpoint_path: path to the checkpoint file.
+
+    Returns:
+      assign_fn: a function that that load weights from checkpoint.
+    """
+    tf.logging.info('RNNEncoder::assign_from_checkpoint_fn is called.')
+
+  def encode(self, text_lengths, text_strings, is_training=True):
+    """Encodes texts into embedding vectors.
 
     Args:
       text_lengths: a [batch] tensor indicating lenghts of each text.
@@ -53,12 +64,14 @@ class RNNEmbedder(TextEmbedder):
     embedding_weights = self.build_weights(
         vocab_size=model_proto.vocab_size,
         embedding_size=model_proto.embedding_size,
+        init_width=model_proto.init_width,
         weight_decay=model_proto.weight_decay)
     embeddings = tf.nn.embedding_lookup(embedding_weights, text_strings)
+
     if is_training:
       embeddings = tf.nn.dropout(embeddings, model_proto.keep_prob)
 
-    # Average embeddings by weights to get the representation of each string.
+    # Build RNN cell.
     batch_size = text_strings.get_shape()[0].value
     if batch_size is None:
       batch_size = tf.shape(text_strings)[0]
