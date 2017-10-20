@@ -6,6 +6,7 @@ from __future__ import print_function
 from protos import region_proposal_networks_pb2
 from region_proposal_networks.simple_proposal_network import SimpleProposalNetwork
 from region_proposal_networks.multi_objects_proposal_network import MultiObjectsProposalNetwork
+from region_proposal_networks.multi_grids_proposal_network import MultiGridsProposalNetwork
 
 def build(config):
   """Build region proposal network from config.
@@ -29,6 +30,9 @@ def build(config):
 
   if 'multi_objects_proposal_network' == which_oneof:
     return MultiObjectsProposalNetwork(config.multi_objects_proposal_network)
+
+  if 'multi_grids_proposal_network' == which_oneof:
+    return MultiGridsProposalNetwork(config.multi_grids_proposal_network)
 
   raise ValueError('Invalid region proposal network %s.' % (which_oneof))
 

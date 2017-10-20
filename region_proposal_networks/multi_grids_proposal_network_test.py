@@ -11,19 +11,19 @@ from google.protobuf import text_format
 
 from protos import region_proposal_networks_pb2
 from region_proposal_networks import builder
-from region_proposal_networks import multi_objects_proposal_network
+from region_proposal_networks import multi_grids_proposal_network
 
 from utils import vis
 
 slim = tf.contrib.slim
 
 
-class MultiObjectsProposalNetworkTest(tf.test.TestCase):
+class MultiGridsProposalNetworkTest(tf.test.TestCase):
   def setUp(self):
     tf.logging.set_verbosity(tf.logging.INFO)
 
     config_str = """
-      multi_objects_proposal_network: {
+      multi_grids_proposal_network: {
         detection_model {
           ssd {
             num_classes: 1
@@ -171,7 +171,7 @@ class MultiObjectsProposalNetworkTest(tf.test.TestCase):
     g = tf.Graph()
     with g.as_default():
       rpn = builder.build(config)
-      self.assertIsInstance(rpn, multi_objects_proposal_network.MultiObjectsProposalNetwork)
+      self.assertIsInstance(rpn, multi_grids_proposal_network.MultiGridsProposalNetwork)
 
       image = tf.placeholder(shape=[None, None, 3], dtype=tf.uint8)
       proposals = rpn.predict(tf.expand_dims(image, 0), is_training=False)
@@ -181,9 +181,9 @@ class MultiObjectsProposalNetworkTest(tf.test.TestCase):
       self.assertEqual(
           proposals['num_detections'].get_shape().as_list(), [1])
       self.assertEqual(
-          proposals['detection_scores'].get_shape().as_list(), [1, 7])
+          proposals['detection_scores'].get_shape().as_list(), [1, 16])
       self.assertEqual(
-          proposals['detection_boxes'].get_shape().as_list(), [1, 7, 4])
+          proposals['detection_boxes'].get_shape().as_list(), [1, 16, 4])
       invalid_tensor_names = tf.report_uninitialized_variables()
 
     with self.test_session(graph=g) as sess:
@@ -194,19 +194,40 @@ class MultiObjectsProposalNetworkTest(tf.test.TestCase):
 
       proposals = sess.run(proposals, feed_dict={image: image_data})
 
-      self.assertEqual(proposals['num_detections'][0], 1)
+      self.assertEqual(proposals['num_detections'][0], 16)
+
+      # Check anchors.
+      grid_rows = grid_cols = 3
+      grid_height = 1.0 / grid_rows
+      grid_width = 1.0 / grid_cols
+
+      for i in xrange(grid_rows):
+        for j in xrange(grid_cols):
+          self.assertNDArrayNear(
+              proposals['detection_boxes'][0, i * grid_cols + j],
+              [i * grid_height, j * grid_width, (i + 1) * grid_height, (j + 1) * grid_width],
+              err=1e-6)
+      for i in xrange(grid_rows):
+        self.assertNDArrayNear(
+            proposals['detection_boxes'][0, 9 + i],
+            [i * grid_height, 0, (i + 1) * grid_height, 1],
+            err=1e-6)
+      for j in xrange(grid_cols):
+        self.assertNDArrayNear(
+            proposals['detection_boxes'][0, 12 + j],
+            [0, j * grid_width, 1, (j + 1) * grid_width],
+            err=1e-6)
       self.assertNDArrayNear(
-          proposals['detection_boxes'][0, 0],
-          np.array([0.04972243, 0.0, 0.3760559, 0.97612488]),
-          err=1e-6)
+          proposals['detection_boxes'][0, 15],
+          [0, 0, 1, 1], err=1e-6)
 
       vis_data = np.copy(image_data)
       for i in xrange(int(proposals['num_detections'][0])):
         y1, x1, y2, x2 = proposals['detection_boxes'][0, i]
         vis.image_draw_bounding_box(vis_data, [x1, y1, x2, y2])
-      vis.image_save('testdata/results/multi_objects_proposal_network.jpg', 
+      vis.image_save('testdata/results/multi_grids_proposal_network.jpg', 
           vis_data, convert_to_bgr=True)
 
 if __name__ == '__main__':
-    tf.test.main()
+  tf.test.main()
 

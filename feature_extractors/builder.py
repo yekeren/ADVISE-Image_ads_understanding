@@ -7,6 +7,7 @@ from protos import feature_extractors_pb2
 
 from feature_extractors.mobilenet_v1_extractor import MobilenetV1Extractor
 from feature_extractors.inception_v4_extractor import InceptionV4Extractor
+from feature_extractors.fc_extractor import FCExtractor
 
 def build(config):
   """Build feature extractor from config.
@@ -30,5 +31,8 @@ def build(config):
 
   if 'inception_v4_extractor' == which_oneof:
     return InceptionV4Extractor(config.inception_v4_extractor)
+
+  if 'fc_extractor' == which_oneof:
+    return FCExtractor(config.fc_extractor)
 
   raise ValueError('Invalid feature extractor %s.' % (which_oneof))

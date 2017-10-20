@@ -69,4 +69,4 @@ class SimpleProposalNetworkTest(tf.test.TestCase):
           vis_data, convert_to_bgr=True)
 
 if __name__ == '__main__':
-    tf.test.main()
+  tf.test.main()

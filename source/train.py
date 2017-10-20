@@ -9,16 +9,23 @@ from protos import ads_emb_model_pb2
 import numpy as np
 import tensorflow as tf
 
-import ads_emb_model
-import ads_qa_examples
+from source import ads_emb_model
+from source import ads_qa_examples
 
 flags = tf.app.flags
+flags.DEFINE_string('ps_hosts', '', 'Comma-separated list of hostname:port pairs.')
+flags.DEFINE_string('worker_hosts', '', 'Comma-separated list of hostname:port pairs.')
+flags.DEFINE_string('job_name', 'worker', 'Either "ps" or "worker".')
+flags.DEFINE_integer('task_index', 0, 'Index of task within the job, by default, worker 0 is the chief worker.')
+
 flags.DEFINE_string('model_config', 'configs/ads_emb_model.pbtxt', 'Path to the configuration file.')
 
 flags.DEFINE_integer('number_of_steps', 10000, 'Maximum number of steps.')
 flags.DEFINE_float('learning_rate', 0.01, 'Learning rate for training.')
 flags.DEFINE_string('optimizer', 'adam', 'Optimizer for training, adam|adagrad.')
 flags.DEFINE_bool('moving_average', True, 'Whether to use moving average.')
+
+flags.DEFINE_bool('tune_caption_model', True, 'If True, train caption model.')
 
 flags.DEFINE_string('train_log_dir', '', 'The directory where the graph and checkpoints are saved.')
 flags.DEFINE_integer('log_every_n_steps', 1, 'Log every n steps.')
@@ -38,101 +45,153 @@ def default_session_config_proto():
   config = tf.ConfigProto()
   config.allow_soft_placement = True
   config.gpu_options.allow_growth = True
-  config.gpu_options.per_process_gpu_memory_fraction = 1.0
+  config.gpu_options.per_process_gpu_memory_fraction = 0.5
   return config
 
 
 def main(_):
   tf.logging.set_verbosity(tf.logging.INFO)
 
+  # Create a cluster from the parameter server and worker hosts.
+  if FLAGS.ps_hosts:
+    ps_spec = FLAGS.ps_hosts.split(',')
+    worker_spec = FLAGS.worker_hosts.split(',')
+
+    cluster = tf.train.ClusterSpec({
+        "ps": ps_spec, 
+        "worker": worker_spec})
+
+    server = tf.train.Server(cluster, 
+        job_name=FLAGS.job_name, task_index=FLAGS.task_index)
+
+    if FLAGS.job_name == "ps":
+      server.join()
+
   g = tf.Graph()
   with g.as_default():
-    # Create ads embedding model.
-    model_proto = ads_emb_model_pb2.AdsEmbModel()
-    with open(FLAGS.model_config, 'r') as fp:
-      text_format.Merge(fp.read(), model_proto)
+    # Assigns ops to the local worker by default.
+    device_fn = None
+    if FLAGS.ps_hosts:
+      device_fn = tf.train.replica_device_setter(
+            worker_device="/job:worker/task:%d" % (FLAGS.task_index),
+            ps_device="/job:ps/cpu:0",
+            cluster=cluster)
 
-    # Gets input data.
-    assert model_proto.HasField('examples_reader')
-    examples = ads_qa_examples.get_examples(
-        model_proto.examples_reader)
+    with tf.device(device_fn):
+      # Create ads embedding model.
+      model_proto = ads_emb_model_pb2.AdsEmbModel()
+      with open(FLAGS.model_config, 'r') as fp:
+        text_format.Merge(fp.read(), model_proto)
 
-    model = ads_emb_model.AdsEmbModel(model_proto)
-    triplet_loss_summaries, assign_fn = model.build(
-        images=examples['image'],
-        num_captions=examples['num_captions'],
-        caption_lengths=examples['caption_lengths'],
-        caption_strings=examples['caption_strings'],
-        num_detections=examples.get('num_detections', None),
-        proposed_features=examples.get('proposed_features', None),
-        topics=examples['topic'],
-        densecap_num_captions=examples.get('densecap_num_captions', None),
-        densecap_caption_lengths=examples.get('densecap_caption_lengths', None),
-        densecap_caption_strings=examples.get('densecap_caption_strings', None),
-        is_training=True)
+      # Gets input data.
+      assert model_proto.HasField('examples_reader')
+      examples = ads_qa_examples.get_examples(
+          model_proto.examples_reader)
 
-    # Losses.
-    for k, v in triplet_loss_summaries.iteritems():
-      tf.summary.scalar(k, v)
+      model = ads_emb_model.AdsEmbModel(model_proto)
+      triplet_loss_summaries, assign_fn = model.build(
+          images=examples['image'],
+          num_captions=examples['num_captions'],
+          caption_lengths=examples['caption_lengths'],
+          caption_strings=examples['caption_strings'],
+          num_detections=examples.get('num_detections', None),
+          proposed_features=examples.get('proposed_features', None),
+          topics=examples['topic'],
+          densecap_num_captions=examples.get('densecap_num_captions', None),
+          densecap_caption_lengths=examples.get('densecap_caption_lengths', None),
+          densecap_caption_strings=examples.get('densecap_caption_strings', None),
+          is_training=True)
 
-    regularization_loss = tf.losses.get_regularization_loss()
-    tf.summary.scalar('losses/regularization_loss', regularization_loss)
+      # Losses.
+      for k, v in triplet_loss_summaries.iteritems():
+        tf.summary.scalar(k, v)
 
-    total_loss = tf.losses.get_total_loss()
-    #total_loss = triplet_loss_summaries['losses/triplet_loss_densecap_img']
-    tf.summary.scalar('losses/total_loss', total_loss)
+      regularization_loss = tf.losses.get_regularization_loss()
+      tf.summary.scalar('losses/regularization_loss', regularization_loss)
 
-    # Optimizer.
-    optimizer = None
-    if FLAGS.optimizer == 'adagrad':
-      optimizer = tf.train.AdagradOptimizer(FLAGS.learning_rate)
-    elif FLAGS.optimizer == 'adam':
-      optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
+      total_loss = tf.losses.get_total_loss()
+      #total_loss = triplet_loss_summaries['losses/triplet_loss_densecap_img']
+      tf.summary.scalar('losses/total_loss', total_loss)
 
-    if FLAGS.moving_average:
-      optimizer = tf.contrib.opt.MovingAverageOptimizer(optimizer,
-          average_decay=0.99)
+      # for v in tf.trainable_variables():
+      #   print(v.op.name)
 
-    variables_to_train = tf.trainable_variables()
-    variables_to_train = filter(
-        lambda x: 'MobilenetV1' not in x.op.name, variables_to_train)
-    variables_to_train = filter(
-        lambda x: 'InceptionV4' not in x.op.name, variables_to_train)
-    variables_to_train = filter(
-        lambda x: 'BoxPredictor' not in x.op.name, variables_to_train)
+      # reader = tf.train.NewCheckpointReader('log3/mobilenet_v1.from_image.patch_repr.stn.adagrad_2.0/train/model.ckpt-3838')
+      # variable_map = reader.get_variable_to_shape_map()
+      # print('\n'.join(sorted(variable_map.keys())))
 
-    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-    update_ops = filter(
-        lambda x: 'MobilenetV1' not in x.op.name, update_ops)
-    update_ops = filter(
-        lambda x: 'InceptionV4' not in x.op.name, update_ops)
-    update_ops = filter(
-        lambda x: 'BoxPredictor' not in x.op.name, update_ops)
+      # Optimizer.
+      optimizer = None
+      if FLAGS.optimizer == 'adagrad':
+        optimizer = tf.train.AdagradOptimizer(FLAGS.learning_rate)
+      elif FLAGS.optimizer == 'adam':
+        optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
+      elif FLAGS.optimizer == 'sgd':
+        optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
 
-    # Logs info.
-    tf.logging.info('*' * 128)
-    tf.logging.info('variables_to_train:')
-    for v in variables_to_train:
-      tf.logging.info('%s: %s', v.op.name, v.get_shape().as_list())
+      if FLAGS.moving_average:
+        optimizer = tf.contrib.opt.MovingAverageOptimizer(optimizer,
+            average_decay=0.99)
 
-    tf.logging.info('*' * 128)
-    tf.logging.info('update_ops:')
-    for v in update_ops:
-      tf.logging.info('%s', v.op.name)
+      variables_to_train = tf.trainable_variables()
+      variables_to_train = filter(
+          lambda x: 'MobilenetV1' not in x.op.name, variables_to_train)
+      variables_to_train = filter(
+          lambda x: 'InceptionV4' not in x.op.name, variables_to_train)
+      variables_to_train = filter(
+          lambda x: 'BoxPredictor' not in x.op.name, variables_to_train)
+      if not FLAGS.tune_caption_model:
+        variables_to_train = filter(
+            lambda x: 'caption_encoder' not in x.op.name, variables_to_train)
 
-    def transform_grads_fn(grads):
-      return tf.contrib.training.clip_gradient_norms(grads, 0.1)
+      update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+      update_ops = filter(
+          lambda x: 'MobilenetV1' not in x.op.name, update_ops)
+      update_ops = filter(
+          lambda x: 'InceptionV4' not in x.op.name, update_ops)
+      update_ops = filter(
+          lambda x: 'BoxPredictor' not in x.op.name, update_ops)
+      if not FLAGS.tune_caption_model:
+        update_ops = filter(
+            lambda x: 'caption_encoder' not in x.op.name, update_ops)
 
-    train_op = tf.contrib.training.create_train_op(total_loss,
-        update_ops=update_ops,
-        variables_to_train=variables_to_train, 
-        #transform_grads_fn=transform_grads_fn,
-        summarize_gradients=True,
-        optimizer=optimizer)
+      # Logs info.
+      tf.logging.info('*' * 128)
+      tf.logging.info('variables_to_train:')
+      for v in variables_to_train:
+        tf.logging.info('%s: %s', v.op.name, v.get_shape().as_list())
 
-    saver = None
-    if FLAGS.moving_average:
-      saver = optimizer.swapping_saver()
+      tf.logging.info('*' * 128)
+      tf.logging.info('update_ops:')
+      for v in update_ops:
+        tf.logging.info('%s', v.op.name)
+
+      # Gradient multipliers.
+      gradient_multipliers = {}
+      for v in variables_to_train:
+        if 'affine_transformer' in v.op.name:
+          gradient_multipliers[v] = 0.004
+
+        v_flat = tf.reshape(v, [-1])
+        tf.summary.scalar('summarize_variables/%s_avg' % (v.op.name),
+            tf.reduce_mean(v_flat))
+        tf.summary.scalar('summarize_variables/%s_std' % (v.op.name),
+            tf.sqrt(tf.maximum(
+                1e-12, 
+                tf.reduce_mean(tf.square(v_flat - tf.reduce_mean(v_flat))))))
+        tf.summary.histogram('summarize_variables/%s' % (v.op.name), v_flat)
+
+      train_op = slim.learning.create_train_op(total_loss,
+          update_ops=update_ops,
+          variables_to_train=variables_to_train, 
+          clip_gradient_norm=0.0,
+          gradient_multipliers=gradient_multipliers,
+          summarize_gradients=True,
+          optimizer=optimizer)
+
+      saver = None
+      if FLAGS.moving_average:
+        saver = optimizer.swapping_saver()
 
     # with tf.Session() as sess:
     #   sess.run(tf.global_variables_initializer())
@@ -163,10 +222,16 @@ def main(_):
     # exit(0)
 
   # Starts training.
+  master = None
+  if FLAGS.ps_hosts:
+    master = server.target
+
   tf.logging.info('Start session.')
   slim.learning.train(train_op, 
       logdir=FLAGS.train_log_dir,
       graph=g,
+      master=master,
+      is_chief=(FLAGS.task_index == 0),
       number_of_steps=FLAGS.number_of_steps,
       log_every_n_steps=FLAGS.log_every_n_steps,
       save_interval_secs=FLAGS.save_interval_secs,

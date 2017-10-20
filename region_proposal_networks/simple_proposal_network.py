@@ -9,8 +9,6 @@ import tensorflow as tf
 from protos import region_proposal_networks_pb2
 from region_proposal_networks.region_proposal_network import RegionProposalNetwork
 
-slim = tf.contrib.slim
-
 
 class SimpleProposalNetwork(RegionProposalNetwork):
 
@@ -30,11 +28,12 @@ class SimpleProposalNetwork(RegionProposalNetwork):
     """Returns variable scope."""
     return None
 
-  def predict(self, images):
+  def predict(self, images, is_training=True):
     """Predicts region proposals from images.
 
     Args:
       images: a [batch, height, width, 3] uint8 tensor.
+      is_training: if True, build training graph.
 
     Returns:
       detections: a dictionary containing the following fields

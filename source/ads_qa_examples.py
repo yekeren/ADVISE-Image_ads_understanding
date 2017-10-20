@@ -10,7 +10,7 @@ from tensorflow.contrib.slim.python.slim.data import dataset
 from tensorflow.contrib.slim.python.slim.data import dataset_data_provider
 from tensorflow.contrib.slim.python.slim.data import tfexample_decoder
 
-from protos import ads_emb_model_pb2
+from protos import ads_qa_examples_pb2
 
 _NUM_EXAMPLES=30000
 
@@ -54,21 +54,30 @@ def _create_tfrecord_dataset(config):
       keys_to_features['entity/embeddings'] = tf.FixedLenFeature(
           shape=[config.max_detections, config.feature_dimentions],
           dtype=tf.float32)
+      keys_to_features['entity/scores'] = tf.FixedLenFeature(
+          shape=[config.max_detections], dtype=tf.float32,
+          default_value=[1.0] * config.max_detections)
       items_to_handlers['num_detections'] = tfexample_decoder.Tensor(
           'entity/num_entities')
       items_to_handlers['proposed_features'] = tfexample_decoder.Tensor(
           'entity/embeddings')
+      items_to_handlers['proposed_scores'] = tfexample_decoder.Tensor(
+          'entity/scores')
 
     else:
       # Treat the whole image as an single entity.
-      keys_to_features['entity/fake_one'] = tf.FixedLenFeature(
+      keys_to_features['entity/fake_num'] = tf.FixedLenFeature(
           shape=(), dtype=tf.int64, default_value=1)
       keys_to_features['image/embeddings'] =  tf.FixedLenFeature(
           shape=[1, config.feature_dimentions], dtype=tf.float32)
+      keys_to_features['entity/fake_score'] =  tf.FixedLenFeature(
+          shape=[1], dtype=tf.float32, default_value=[1.0])
       items_to_handlers['num_detections'] = tfexample_decoder.Tensor(
-          'entity/fake_one')
+          'entity/fake_num')
       items_to_handlers['proposed_features'] = tfexample_decoder.Tensor(
           'image/embeddings')
+      items_to_handlers['proposed_scores'] = tfexample_decoder.Tensor(
+          'entity/fake_score')
 
   if config.export_densecap_captions:
     keys_to_features['densecap_caption/num_captions'] = tf.FixedLenFeature(
@@ -123,7 +132,7 @@ def get_examples(config):
   Raises:
     ValueError: if config is invalid.
   """
-  if not isinstance(config, ads_emb_model_pb2.AdsQAExamples):
+  if not isinstance(config, ads_qa_examples_pb2.AdsQAExamples):
     raise ValueError('config has to be an instance of AdsQAExamples.')
 
   dataset = _create_tfrecord_dataset(config)

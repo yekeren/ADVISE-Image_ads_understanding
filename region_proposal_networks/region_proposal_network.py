@@ -16,11 +16,12 @@ class RegionProposalNetwork(object):
     pass
 
   @abc.abstractmethod
-  def predict(self, images):
+  def predict(self, images, is_training=True):
     """Predicts region proposals from images.
 
     Args:
       images: a [batch, height, width, 3] uint8 tensor.
+      is_training: if True, build training graph.
 
     Returns:
       detections: a dictionary containing the following fields
