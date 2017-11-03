@@ -22,6 +22,8 @@ flags.DEFINE_string('model_config', 'configs/ads_emb_model.pbtxt', 'Path to the 
 
 flags.DEFINE_integer('number_of_steps', 10000, 'Maximum number of steps.')
 flags.DEFINE_float('learning_rate', 0.01, 'Learning rate for training.')
+flags.DEFINE_string('learning_rate_boundaries', '50000,100000,150000,200000', 'Learning rate piecewise boundaries.')
+flags.DEFINE_string('learning_rate_values', '2.0,1.0,0.5,0.2,0.1', 'Learning rate for training.')
 flags.DEFINE_string('optimizer', 'adam', 'Optimizer for training, adam|adagrad.')
 flags.DEFINE_bool('moving_average', True, 'Whether to use moving average.')
 
@@ -62,7 +64,9 @@ def main(_):
         "worker": worker_spec})
 
     server = tf.train.Server(cluster, 
-        job_name=FLAGS.job_name, task_index=FLAGS.task_index)
+        job_name=FLAGS.job_name, 
+        task_index=FLAGS.task_index,
+        config=default_session_config_proto())
 
     if FLAGS.job_name == "ps":
       server.join()
@@ -89,28 +93,26 @@ def main(_):
           model_proto.examples_reader)
 
       model = ads_emb_model.AdsEmbModel(model_proto)
-      triplet_loss_summaries, assign_fn = model.build(
-          images=examples['image'],
+      assign_fn = model.build(
+          images=examples.get('image', None),
           num_captions=examples['num_captions'],
           caption_lengths=examples['caption_lengths'],
           caption_strings=examples['caption_strings'],
           num_detections=examples.get('num_detections', None),
           proposed_features=examples.get('proposed_features', None),
           topics=examples['topic'],
+          num_symbols=examples['num_symbols'],
+          symbols=examples['symbols'],
           densecap_num_captions=examples.get('densecap_num_captions', None),
           densecap_caption_lengths=examples.get('densecap_caption_lengths', None),
           densecap_caption_strings=examples.get('densecap_caption_strings', None),
           is_training=True)
 
       # Losses.
-      for k, v in triplet_loss_summaries.iteritems():
-        tf.summary.scalar(k, v)
-
       regularization_loss = tf.losses.get_regularization_loss()
       tf.summary.scalar('losses/regularization_loss', regularization_loss)
 
       total_loss = tf.losses.get_total_loss()
-      #total_loss = triplet_loss_summaries['losses/triplet_loss_densecap_img']
       tf.summary.scalar('losses/total_loss', total_loss)
 
       # for v in tf.trainable_variables():
@@ -121,13 +123,23 @@ def main(_):
       # print('\n'.join(sorted(variable_map.keys())))
 
       # Optimizer.
+      global_step = slim.get_or_create_global_step()
+      learning_rate = FLAGS.learning_rate
+      #learning_rate_boundaries = map(int, FLAGS.learning_rate_boundaries.split(','))
+      #learning_rate_values = map(float, FLAGS.learning_rate_values.split(','))
+
+      #learning_rate = tf.train.piecewise_constant(
+      #    tf.cast(global_step, tf.int32),
+      #    learning_rate_boundaries, learning_rate_values)
+      tf.summary.scalar('train/learning_rate', learning_rate)
+
       optimizer = None
       if FLAGS.optimizer == 'adagrad':
-        optimizer = tf.train.AdagradOptimizer(FLAGS.learning_rate)
+        optimizer = tf.train.AdagradOptimizer(learning_rate)
       elif FLAGS.optimizer == 'adam':
-        optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
+        optimizer = tf.train.AdamOptimizer(learning_rate)
       elif FLAGS.optimizer == 'sgd':
-        optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
+        optimizer = tf.train.GradientDescentOptimizer(learning_rate)
 
       if FLAGS.moving_average:
         optimizer = tf.contrib.opt.MovingAverageOptimizer(optimizer,
@@ -193,33 +205,38 @@ def main(_):
       if FLAGS.moving_average:
         saver = optimizer.swapping_saver()
 
-    # with tf.Session() as sess:
-    #   sess.run(tf.global_variables_initializer())
-    #   assign_fn(sess)
-    #   #saver.restore(sess, 'log/mobilenet_v1/train/model.ckpt-9251')
-    #   
-    #   coord = tf.train.Coordinator()
-    #   threads = tf.train.start_queue_runners(coord=coord)
+    #with tf.Session() as sess:
+    #  sess.run(tf.global_variables_initializer())
+    #  assign_fn(sess)
+    #  #saver.restore(sess, 'log/mobilenet_v1/train/model.ckpt-9251')
+    #  
+    #  coord = tf.train.Coordinator()
+    #  threads = tf.train.start_queue_runners(coord=coord)
 
-    #   for i in xrange(10000):
-    #     sess.run(train_op)
+    #  for i in xrange(10000):
+    #    #sess.run(train_op)
 
-    #     if i % 10 == 0:
-    #       example = sess.run(model.tensors)
-    #       print('*' * 128)
-    #       print(example['densecap_caption_embs'][0, :10])
-    #       print(example['image_embs'][0, :10])
-    #       #print('densecap_norm:', example['densecap_norm'][:5])
-    #       print(example['loss_ratio'])
-    #       print(example['densecap_loss_ratio'])
+    #    #if i % 1 == 0:
+    #    #  print('*' * 128)
+    #      symbols = sess.run(examples['num_symbols'])
+    #      print(symbols)
 
-    #       print(example['img_densecap'])
-    #       print(example['densecap_img'])
+    #      #example = sess.run(model.tensors)
+    #      #print(example['densecap_caption_embs'][0, :10])
+    #      #print(example['image_embs'][0, :10])
+    #      #print('densecap_norm:', example['densecap_norm'][:5])
+    #      #print(example['loss_ratio'])
+    #      #print(example['densecap_loss_ratio'])
 
-    #   coord.request_stop()
-    #   coord.join(threads, stop_grace_period_secs=10)
+    #      #print(example['img_densecap'])
+    #      #print(example['densecap_img'])
+    #      #print(example['num_symbols'])
+    #      #print(example['num_symbols'].shape)
 
-    # exit(0)
+    #  coord.request_stop()
+    #  coord.join(threads, stop_grace_period_secs=10)
+
+    #exit(0)
 
   # Starts training.
   master = None

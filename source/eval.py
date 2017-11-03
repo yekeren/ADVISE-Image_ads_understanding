@@ -5,6 +5,7 @@ from __future__ import print_function
 
 import os
 import re
+import sys
 import cv2
 import time
 import nltk
@@ -19,7 +20,7 @@ import tensorflow as tf
 import ads_emb_model
 
 from utils import vis
-from utils import ads_dataset_api
+from utils import ads_api
 
 from train import FLAGS
 from train import default_session_config_proto
@@ -31,22 +32,14 @@ flags.DEFINE_string('eval_log_dir', '', 'The directory where the graph is saved.
 flags.DEFINE_integer('eval_interval_secs', 180, 'Seconds to sleep when there is no checkpoint.')
 flags.DEFINE_integer('eval_min_global_steps', 200, 'Minimum global steps for evaluation.')
 
+flags.DEFINE_string('ads_config', '', 'File path to ads config file.')
+flags.DEFINE_string('feature_path', '', 'File path to image features.')
 flags.DEFINE_string('vocab_path', '', 'Path to vocab file.')
-flags.DEFINE_string('densecap_vocab_path', '', 'Path to densecap vocab file.')
-flags.DEFINE_string('image_dir', '', 'Directory to ads dataset.')
-flags.DEFINE_integer('max_image_size', 800, 'Maximum value of image size.')
-flags.DEFINE_string('topic_list_path', '', 'File path to ads topic list.')
-flags.DEFINE_string('topic_annot_path', '', 'File path to ads topic annotations.')
-flags.DEFINE_string('densecap_annot_file', '', 'File path to ads densecap annotations.')
-flags.DEFINE_string('qa_action_annot_path', '', 'File path to ads action annotations.')
-flags.DEFINE_string('qa_reason_annot_path', '', 'File path to ads reason annotations.')
-flags.DEFINE_string('qa_action_reason_annot_path', '', 'File path to ads action reason annotations.')
-flags.DEFINE_integer('num_positive_statements', 3, 'Number of positive statements.')
-flags.DEFINE_integer('num_negative_statements', 17, 'Number of negative statements.')
-flags.DEFINE_integer('max_string_len', 30, 'Maximum length of strings.')
-flags.DEFINE_integer('densecap_max_string_len', 10, 'Maximum length of strings.')
 
-flags.DEFINE_integer('max_val_examples', 1000, 'Maximum number of examples to validate.')
+flags.DEFINE_integer('num_positive_statements', 3, 'Maximum value of image size.')
+flags.DEFINE_integer('max_image_size', 500, 'Maximum value of image size.')
+flags.DEFINE_integer('max_string_len', 30, 'Maximum length of strings.')
+flags.DEFINE_integer('max_val_examples', 1000, 'Maximum number of validation examples.')
 flags.DEFINE_integer('max_vis_examples', 1000, 'Maximum number of examples to visualize.')
 
 flags.DEFINE_boolean('continuous_evaluation', True, 
@@ -55,9 +48,8 @@ flags.DEFINE_boolean('continuous_evaluation', True,
 slim = tf.contrib.slim
 ckpt_path = None
 
-ps = PorterStemmer()
-
 topic_to_name = None
+symbol_to_name = None
 
 def load_vocab(vocab_path):
   """Load vocabulary from file.
@@ -89,12 +81,10 @@ def load_vocab(vocab_path):
   return vocab, vocab_r
 
 vocab, vocab_r = load_vocab(FLAGS.vocab_path)
-densecap_vocab, densecap_vocab_r = load_vocab(FLAGS.densecap_vocab_path)
 
 def _tokenize(caption):
   caption = caption.replace('<UNK>', '')
   caption = nltk.word_tokenize(caption.lower())
-  #caption = [ps.stem(w) for w in caption]
   return caption
 
 
@@ -106,44 +96,47 @@ def visualize(global_step, vis_examples):
   html += '<tr>'
   html += '<th>Image ID</th>'
   html += '<th>Image Data</th>'
-  if 'proposed_boxes' in vis_examples[0]:
-    html += '<th>Refined boxes</th>'
+  #if 'proposed_boxes' in vis_examples[0]:
+  #  html += '<th>Refined boxes</th>'
   if 'scores_topic' in vis_examples[0]:
     html += '<th>Topics</th>'
-  if 'scores_densecap' in vis_examples[0]:
-    html += '<th>DenseCap</th>'
+  if 'scores_symbol' in vis_examples[0]:
+    html += '<th>Symbols</th>'
   html += '<th>Statements</th>'
   html += '</tr>'
 
-  for example in vis_examples:
+  for example_index, example in enumerate(vis_examples):
     html += '<tr id="%s">' % (example['image_id'])
+    if example_index % 10 == 0:
+      tf.logging.info('Vis on image %d/%d.', example_index, len(vis_examples))
 
     # Anchor for the image_id.
     html += '<td><a href="#%s">%s</a></td>' % (example['image_id'], example['image_id'])
 
     # Image with proposal annotations.
-    image = cv2.resize(example['image'], (500, 500))
-    for i in xrange(example['num_detections'][0]):
-      if example['detection_scores'][0, i] > 0.01:
-        y1, x1, y2, x2 = example['detection_boxes'][0, i].tolist()
+    image = np.copy(example['image'])
+    for obj_index, obj in enumerate(example['objects']):
+      if 'proposed_scores' not in example or obj_index < example['proposed_scores'].shape[1]:
+        y1, x1, y2, x2 = obj['ymin'], obj['xmin'], obj['ymax'], obj['xmax']
         vis.image_draw_bounding_box(image, [x1, y1, x2, y2])
-        vis.image_draw_text(image, [x1, y1],
-            '%.3lf' % (example['detection_scores'][0, i]),
+        vis.image_draw_text(image, [x1, y1], 
+            '%.3lf' % (1.0 if 'proposed_scores' not in example 
+              else float(example['proposed_scores'][0, obj_index])),
             color=(0, 0, 0))
     html += '<td><img src="data:image/jpg;base64,%s"></td>' % (
         vis.image_uint8_to_base64(image, convert_to_bgr=True))
 
-    if 'proposed_boxes' in example:
-      image = cv2.resize(example['image'], (500, 500))
-      for i in xrange(example['num_detections'][0]):
-        if example['proposed_scores'][0, i] > 0.01:
-          y1, x1, y2, x2 = example['proposed_boxes'][0, i].tolist()
-          vis.image_draw_bounding_box(image, [x1, y1, x2, y2])
-          vis.image_draw_text(image, [x1, y1],
-              '%.3lf' % (example['proposed_scores'][0, i]),
-              color=(0, 0, 0))
-      html += '<td><img src="data:image/jpg;base64,%s"></td>' % (
-          vis.image_uint8_to_base64(image, convert_to_bgr=True))
+    #if 'proposed_boxes' in example:
+    #  image = cv2.resize(example['image'], (500, 500))
+    #  for i in xrange(example['num_detections'][0]):
+    #    if example['proposed_scores'][0, i] > 0.01:
+    #      y1, x1, y2, x2 = example['proposed_boxes'][0, i].tolist()
+    #      vis.image_draw_bounding_box(image, [x1, y1, x2, y2])
+    #      vis.image_draw_text(image, [x1, y1],
+    #          '%.3lf' % (example['proposed_scores'][0, i]),
+    #          color=(0, 0, 0))
+    #  html += '<td><img src="data:image/jpg;base64,%s"></td>' % (
+    #      vis.image_uint8_to_base64(image, convert_to_bgr=True))
 
     # Topic predictions.
     if 'scores_topic' in example:
@@ -158,15 +151,16 @@ def visualize(global_step, vis_examples):
               scores[topic_id], topic_to_name[topic_id])
       html += '</td>'
 
-    # Densecap predictions.
-    if 'scores_densecap' in example:
+    if 'scores_symbol' in example:
       html += '<td>'
-      scores = example['scores_densecap']
-      for caption_id in scores.argsort():
-        caption = example['densecap_caption_strings'][caption_id]
-        caption_len = example['densecap_caption_lengths'][caption_id]
-        caption = map(lambda x: densecap_vocab[x], caption.tolist())[:caption_len]
-        html += '<p>[%.4lf] %s</p>' % (scores[caption_id], ' '.join(caption))
+      scores = example['scores_symbol']
+      for symbol_id in scores.argsort()[:20]:
+        if symbol_id in example['symbol_ids']:
+          html += '<p style="background-color:Yellow">[%.4lf] %s</p>' % (
+              scores[symbol_id], symbol_to_name[symbol_id])
+        else:
+          html += '<p>[%.4lf] %s</p>' % (
+              scores[symbol_id], symbol_to_name[symbol_id])
       html += '</td>'
 
     # Statements with similarity scores.
@@ -232,18 +226,25 @@ def evaluate_once(sess, writer, global_step,
   for example_id, example in enumerate(eval_data):
 
     result = sess.run(result_dict, feed_dict={
-        eval_placeholders['image']: example['image'],
+        eval_placeholders['object_num']: example['num_detections'],
+        eval_placeholders['object_features']: example['proposed_features'],
         eval_placeholders['caption_strings']: example['caption_strings'],
         eval_placeholders['caption_lengths']: example['caption_lengths'],
-        eval_placeholders['densecap_caption_strings']: example['densecap_caption_strings'],
-        eval_placeholders['densecap_caption_lengths']: example['densecap_caption_lengths'],
         })
+
     if example_id % 50 == 0:
       tf.logging.info('On image %d of %d.', example_id, len(eval_data))
 
     if len(vis_examples) < FLAGS.max_vis_examples:
       vis_example = example
-      vis_example.update(result)
+      vis_example['objects'] = example['objects']
+      vis_example['scores'] = result['scores']
+      if 'proposed_scores' in result:
+        vis_example['proposed_scores'] = result['proposed_scores']
+      if 'scores_topic' in result:
+        vis_example['scores_topic'] = result['scores_topic']
+      if 'scores_symbol' in result:
+        vis_example['scores_symbol'] = result['scores_symbol']
       vis_examples.append(vis_example)
 
     # Multi-choice task.
@@ -425,6 +426,8 @@ def evaluate_best_model(sess, saver, writer, global_step,
 def save_model_if_it_is_better(global_step, model_path, model_metric):
   """Save model if it is better than previous best model.
 
+  The function delete model checkpoint if it is not a better model.
+
   Args:
     global_step: a integer denoting current global step.
     model_path: current model path.
@@ -434,8 +437,6 @@ def save_model_if_it_is_better(global_step, model_path, model_metric):
     global_step_best: global step of the best model.
     model_metric_best: performance of the best model.
   """
-  tf.gfile.MakeDirs(FLAGS.saved_ckpts_dir)
-
   # Read the record file to get the previous best model.
   global_step_best = None
   model_metric_best = None
@@ -447,23 +448,26 @@ def save_model_if_it_is_better(global_step, model_path, model_metric):
     global_step_best = int(global_step_best)
     model_metric_best = float(model_metric_best)
 
-  # Save model if it beats the previous best one.
-  if model_metric_best is None or model_metric > model_metric_best + 0.0001:
-    tf.logging.info('Current model is better than previous best one.')
+  # Modify record file if the model beats the previous best one.
+  if model_metric_best is None or model_metric > model_metric_best:
+    tf.logging.info(
+        'Current model[%.4lf] is better than the previous best one[%.4lf].',
+        model_metric, 0.0 if model_metric_best is None else model_metric_best)
     global_step_best = global_step
     model_metric_best = model_metric
 
     with open(record_file, 'w') as fp:
       fp.write('%d\t%.8lf' % (global_step, model_metric))
 
+  # Remove the backup files since the model is not better.
+  else:
+    tf.logging.info(
+        'Current model[%.4lf] is not better than previous best one[%.4lf].',
+        model_metric, model_metric_best)
     for file_path in tf.gfile.Glob(model_path + '*'):
       dest_path = os.path.join(FLAGS.saved_ckpts_dir, os.path.split(file_path)[1])
-      tf.gfile.Copy(file_path, dest_path, overwrite=True)
-      tf.logging.info('Copy %s to %s', file_path, dest_path)
-
-  else:
-    tf.logging.info('Current model[%.4lf] is not better than previous best one[%.4lf].',
-        model_metric, model_metric_best)
+      tf.gfile.Remove(dest_path)
+      tf.logging.info('Delete %s.', dest_path)
 
   return global_step_best, model_metric_best
 
@@ -473,29 +477,38 @@ def evaluation_loop(sess, saver, writer, global_step,
   global ckpt_path
 
   while True:
+    start = time.time()
     try:
+    #if True:
       model_path = tf.train.latest_checkpoint(FLAGS.train_log_dir)
 
-      start = time.time()
       if model_path and ckpt_path != model_path:
         ckpt_path = model_path
-        saver.restore(sess, model_path)
 
+        # Restore model and verify all variables are fine.
+        saver.restore(sess, model_path)
         names = sess.run(result_dict['invalid_tensor_names'])
-        #embedding_weights = sess.run(result_dict['embedding_weights'])
-        #np.save('learned_emb.npz', embedding_weights[1:, :])
-        #tf.logging.info('saved!!!!')
+        assert len(names) == 0
 
         tf.logging.info('*' * 128)
         tf.logging.info('Load checkpoint %s.', model_path)
 
-        # Evaluate.
+        # Evaluate model.
         step = sess.run(global_step)
         if step < FLAGS.eval_min_global_steps:
           tf.logging.info('Global step=%s < %s.', step, FLAGS.eval_min_global_steps)
           continue
+        tf.logging.info('Start to evaluate model at global step=%s.', step)
 
-        tf.logging.info('Global step=%s.', step)
+        # Backup checkpoint.
+        tf.logging.info('Copying files...')
+        tf.gfile.MakeDirs(FLAGS.saved_ckpts_dir)
+
+        for file_path in tf.gfile.Glob(model_path + '*'):
+          dest_path = os.path.join(FLAGS.saved_ckpts_dir, os.path.split(file_path)[1])
+          tf.gfile.Copy(file_path, dest_path, overwrite=True)
+          tf.logging.info('Copy %s to %s.', file_path, dest_path)
+
         model_metric, vis_examples = evaluate_once(
             sess, writer, step, result_dict, eval_placeholders, eval_data)
 
@@ -523,7 +536,7 @@ def evaluation_loop(sess, saver, writer, global_step,
         tf.logging.info('No new checkpoint was found in %s.', FLAGS.train_log_dir)
 
     except Exception as ex:
-      tf.logging.info(ex)
+      pass
 
     eval_secs = time.time() - start
     if FLAGS.eval_interval_secs - eval_secs > 0:
@@ -531,111 +544,115 @@ def evaluation_loop(sess, saver, writer, global_step,
           FLAGS.eval_interval_secs - eval_secs)
       time.sleep(FLAGS.eval_interval_secs - eval_secs)
 
-def _get_eval_data(data_type, image_level_feature=True):
-  api = ads_dataset_api.AdsDatasetApi()
-  api.init(
-      images_dir=FLAGS.image_dir, 
-      topic_list_file=FLAGS.topic_list_path, 
-      topic_annot_file=FLAGS.topic_annot_path,
-      densecap_annot_file=FLAGS.densecap_annot_file,
-      qa_action_annot_file=FLAGS.qa_action_annot_path,
-      qa_reason_annot_file=FLAGS.qa_reason_annot_path,
-      qa_action_reason_annot_file=FLAGS.qa_action_reason_annot_path,
-      qa_action_reason_padding=FLAGS.num_positive_statements)
-  api.sample_negative_action_reason_captions(FLAGS.num_negative_statements)
+def _get_eval_data(raw_features, split, image_level_feature=False):
+  api = ads_api.AdsApi(FLAGS.ads_config, 
+      invalid_items=['densecap_annotations'])
+  meta_list = api.get_meta_list(split)
 
   global topic_to_name
-  topic_to_name = api.topic_to_name
+  topic_to_name = api.get_topic_to_name()
 
-  if 'testing' == data_type:
-    filter_fn = ads_dataset_api.is_testing_example
-  elif 'validation' == data_type:
-    filter_fn = ads_dataset_api.is_validation_example
+  global symbol_to_name
+  symbol_to_name = api.get_symbol_to_name()
 
   examples = []
-  meta_list = api.get_meta_list()
-  for meta in meta_list:
-    image_id = meta['image_id']
-    if filter_fn(image_id) and 'action_reason_captions' in meta:
-      image = vis.image_load(meta['filename'], True)
-      height, width, _ = image.shape
-      if height > FLAGS.max_image_size or width > FLAGS.max_image_size:
-        image = cv2.resize(image, (FLAGS.max_image_size, FLAGS.max_image_size))
+  for meta_index, meta in enumerate(meta_list):
+
+    if meta_index % 100 == 0:
+      tf.logging.info('Load %d/%d.', meta_index, len(meta_list))
+
+    if 'statements' in meta and 'negative_statements' in meta:
+      image_id = meta['image_id']
+
+      # Topic of the image.
       topic_id = meta.get('topic_id', 0)
       topic_name = meta.get('topic_name', 'unclear')
 
+      # Ads detection results.
+      raw_feature = raw_features[image_id]
+      if image_level_feature:
+        num_detections = 1
+        proposed_features = np.expand_dims(raw_feature['image_emb'], 0)
+      else:
+        proposed_features = np.concatenate([
+            np.expand_dims(raw_feature['image_emb'], 0), 
+            raw_feature['object_emb_list']],
+            axis=0)[:-1]
+        num_detections = proposed_features.shape[0]
+
       # Ads QA statements.
-      captions = meta['action_reason_captions'] + meta['action_reason_captions_neg']
+      captions = meta['statements'] + meta['negative_statements']
       caption_strings = np.zeros((len(captions), FLAGS.max_string_len), dtype=np.int64)
       caption_lengths = np.zeros((len(captions)))
-
       for c_index, caption in enumerate(captions):
         caption = [vocab_r.get(w, (0, 0))[0] for w in _tokenize(caption)][:FLAGS.max_string_len]
         caption_strings[c_index, :len(caption)] = caption
         caption_lengths[c_index] = len(caption)
 
-      # DenseCap.
-      densecap_captions = list(set([x['caption'] for x in
-            meta['densecap_entities'] if x['score'] > 0]))
-      densecap_captions = map(lambda x: x.replace('<UNK>', ''), densecap_captions)
-      densecap_caption_strings = np.zeros((len(densecap_captions), FLAGS.densecap_max_string_len), dtype=np.int64)
-      densecap_caption_lengths = np.zeros((len(densecap_captions)))
-
-      for c_index, caption in enumerate(densecap_captions):
-        caption = [densecap_vocab_r.get(w, (0, 0))[0] for w in _tokenize(caption)][:FLAGS.densecap_max_string_len]
-        densecap_caption_strings[c_index, :len(caption)] = caption
-        densecap_caption_lengths[c_index] = len(caption)
-
-      examples.append({
+      example = {
           'image_id': image_id,
-          'image': image,
+          'num_detections': num_detections,
+          'proposed_features': proposed_features,
+          'objects': meta['objects'],
           'topic_id': topic_id,
           'topic': topic_name,
+          'symbol_ids': meta.get('symbol_ids', []),
+          'symbol_names': meta.get('symbol_names', []),
           'caption_lengths': caption_lengths,
-          'caption_strings': caption_strings,
-          'densecap_caption_lengths': densecap_caption_lengths,
-          'densecap_caption_strings': densecap_caption_strings,
-          })
+          'caption_strings': caption_strings
+      }
+
+      # Load image data.
+      if len(examples) < FLAGS.max_vis_examples:
+        image = vis.image_load(meta['file_path'], True)
+        height, width, _ = image.shape
+        if height > FLAGS.max_image_size or width > FLAGS.max_image_size:
+          image = cv2.resize(image, (FLAGS.max_image_size, FLAGS.max_image_size))
+        example['image'] = image
+
+      examples.append(example)
 
       if len(examples) >= FLAGS.max_val_examples:
         break
 
-  tf.logging.info('Loaded %s %s examples.', len(examples), data_type)
+  tf.logging.info('Loaded %s %s examples.', len(examples), split)
   return examples
 
 
 def main(_):
   tf.logging.set_verbosity(tf.logging.INFO)
 
+  model_proto = ads_emb_model_pb2.AdsEmbModel()
+  with open(FLAGS.model_config, 'r') as fp:
+    text_format.Merge(fp.read(), model_proto)
+
   g = tf.Graph()
   with g.as_default():
-    image_placeholder = tf.placeholder(
-        dtype=tf.uint8, shape=[None, None, 3])
+    object_num_placeholder = tf.placeholder(
+        dtype=tf.int64, shape=[])
+    object_features_placeholder = tf.placeholder(dtype=tf.float32, 
+        shape=[None, model_proto.examples_reader.feature_dimentions])
+
     caption_strings_placeholder = tf.placeholder(
         dtype=tf.int64, shape=[None, FLAGS.max_string_len])
     caption_lengths_placeholder = tf.placeholder(
         dtype=tf.int64, shape=[None])
-    densecap_caption_strings_placeholder = tf.placeholder(
-        dtype=tf.int64, shape=[None, FLAGS.densecap_max_string_len])
-    densecap_caption_lengths_placeholder = tf.placeholder(
-        dtype=tf.int64, shape=[None])
 
     eval_placeholders = {
-      'image': image_placeholder,
+      'object_num': object_num_placeholder,
+      'object_features': object_features_placeholder,
       'caption_strings': caption_strings_placeholder,
       'caption_lengths': caption_lengths_placeholder,
-      'densecap_caption_strings': densecap_caption_strings_placeholder,
-      'densecap_caption_lengths': densecap_caption_lengths_placeholder
     }
     # Create ads embedding model.
-    model_proto = ads_emb_model_pb2.AdsEmbModel()
-    with open(FLAGS.model_config, 'r') as fp:
-      text_format.Merge(fp.read(), model_proto)
     model = ads_emb_model.AdsEmbModel(model_proto)
 
     # Get image embedding vector.
-    image_embs, assign_fn_img = model.build_image_model(
-        tf.expand_dims(image_placeholder, 0), is_training=False)
+    image_embs = model.build_image_model_from_feature(
+        tf.expand_dims(object_num_placeholder, 0),
+        tf.expand_dims(object_features_placeholder, 0),
+        is_training=False)
+
     image_embs = tf.nn.l2_normalize(image_embs, 1)
     image_emb = image_embs[0, :]
 
@@ -652,23 +669,27 @@ def main(_):
     # Get topic embedding vectors.
     scores_topic = None
     if model.topic_encoder is not None:
-      topics_const = tf.range(
-          model_proto.topic_encoder.bow_encoder.vocab_size, 
-          dtype=tf.int64)
-      topic_embs, assign_fn_topic = model.build_topic_model(
-          topics_const, is_training=False)
+
+      topic_embs = model.topic_encoder.build_weights(
+          vocab_size=model_proto.topic_encoder.bow_encoder.vocab_size,
+          embedding_size=model_proto.topic_encoder.bow_encoder.embedding_size) 
       topic_embs = tf.nn.l2_normalize(topic_embs, 1)
       scores_topic = ads_emb_model.distance_fn(image_emb, topic_embs)
 
-    # Get densecap embedding vectors.
+    # Get symbol embedding vectors.
+    scores_symbol = None
+    if model.symbol_encoder is not None:
+
+      symbol_embs = model.symbol_encoder.build_weights(
+          vocab_size=model_proto.symbol_encoder.bow_encoder.vocab_size,
+          embedding_size=model_proto.symbol_encoder.bow_encoder.embedding_size) 
+      symbol_embs = tf.nn.l2_normalize(symbol_embs, 1)
+      scores_symbol = ads_emb_model.distance_fn(image_emb, symbol_embs)
+
+    # Get densecap word embedding vectors.
     scores_densecap = None
     if model.densecap_encoder is not None:
-      densecap_embs, assign_fn_densecap = model.build_densecap_caption_model(
-          densecap_caption_lengths_placeholder,
-          densecap_caption_strings_placeholder, 
-          is_training=False)
-      densecap_embs = tf.nn.l2_normalize(densecap_embs, 1)
-      scores_densecap = ads_emb_model.distance_fn(image_emb, densecap_embs)
+      pass
 
     global_step = slim.get_or_create_global_step()
 
@@ -686,11 +707,6 @@ def main(_):
     invalid_tensor_names = tf.report_uninitialized_variables()
     saver = tf.train.Saver(variables_to_restore)
 
-  if FLAGS.continuous_evaluation:
-    eval_data = _get_eval_data('validation')
-  else:
-    eval_data = _get_eval_data('testing')
-
   # Build result dict for both evaluation and visualization.
   result_dict = {
     'scores': scores,
@@ -699,22 +715,26 @@ def main(_):
     'embedding_weights': embedding_weights,
     'invalid_tensor_names': invalid_tensor_names,
   }
+
   if scores_topic is not None:
     result_dict['scores_topic'] = scores_topic
-  if scores_densecap is not None:
-    result_dict['scores_densecap'] = scores_densecap
+  if scores_symbol is not None:
+    result_dict['scores_symbol'] = scores_symbol
   result_dict.update(model.tensors)
 
   def assign_fn(sess):
-    assign_fn_img(sess)
     assign_fn_cap(sess)
 
-    if model.densecap_encoder is not None:
-      assign_fn_densecap(sess)
+  # Load eval data.
+  raw_features = np.load(FLAGS.feature_path).item()
+  image_level_feature = model_proto.examples_reader.image_level_feature
+  tf.logging.info("Use image level feature: %s", image_level_feature)
+  if FLAGS.continuous_evaluation:
+    eval_data = _get_eval_data(raw_features, 'valid', image_level_feature)
+  else:
+    eval_data = _get_eval_data(raw_features, 'test', image_level_feature)
 
-    if model.topic_encoder is not None:
-      assign_fn_topic(sess)
-
+  # Start session.
   with tf.Session(graph=g, config=default_session_config_proto()) as sess:
     assign_fn(sess)
 

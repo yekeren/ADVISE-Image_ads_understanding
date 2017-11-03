@@ -45,98 +45,39 @@ def distance_fn(x, y):
   #return tf.reduce_sum(tf.square(x - y), axis=1)
 
 
-def mine_semi_hard_examples(distances):
-  """Mine semi hard examples.
-    
+def _triplet_loss_wrapper(anchors, positives, mine_fn, refine_fn,
+    distance_fn, margin, anchor_name, positive_name):
+  """Wrapper function to process triplet loss.
+
   Args:
-    distances: a [batch, batch] float tensor, in which distances[i, j] is the
-      cosine distance between i-th image and j-th caption.
+    anchors: [batch, embedding_size] tensor.
+    positives: [batch, embedding_size] tensor.
+    mine_fn: method to mine <anchor, positive, negative> tuples.
+    refine_fn: method to filter <anchor, positive, negative> tuples.
+    anchor_name: name of the anchor.
+    positive_name: name of the positive.
 
   Returns:
-    pos_indices: a [batch] int64 tensor indicateing indices of positive examples.
-    neg_indices: a [batch] int64 tensor indicateing indices of negative examples.
+    triplet_loss_summaries: a dict containing basic triplets info.
   """
-  # pos_distances is the distance between matched image-caption pairs.
-  pos_distances = tf.expand_dims(tf.diag_part(distances), 1)
-  indices = tf.where(pos_distances < distances)
-  return indices[:, 0], indices[:, 1]
+  distances = tf.reduce_sum(tf.squared_difference( 
+        tf.expand_dims(anchors, 1), tf.expand_dims(positives, 0)), 2)
 
-def mine_all_examples(distances):
-  """Mine semi hard examples.
-    
-  Args:
-    distances: a [batch, batch] float tensor, in which distances[i, j] is the
-      cosine distance between i-th image and j-th caption.
+  pos_indices, neg_indices = mine_fn(distances)
+  if refine_fn is not None:
+    pos_indices, neg_indices = refine_fn(pos_indices, neg_indices)
 
-  Returns:
-    pos_indices: a [batch] int64 tensor indicateing indices of positive examples.
-    neg_indices: a [batch] int64 tensor indicateing indices of negative examples.
-  """
-  # pos_distances is the distance between matched image-caption pairs.
-  batch_size = distances.get_shape()[0].value
+  loss_summaries = triplet_loss.compute_triplet_loss(
+      anchors=tf.gather(anchors, pos_indices), 
+      positives=tf.gather(positives, pos_indices), 
+      negatives=tf.gather(positives, neg_indices),
+      distance_fn=distance_fn,
+      alpha=margin)
 
-  indices = tf.where(
-      tf.less(
-        tf.diag(tf.fill([batch_size], 1)), 
-        1))
-  return indices[:, 0], indices[:, 1]
-
-def mine_hard_examples(categories):
-  """Mine hard examples.
-
-  Args:
-    categories: a [batch] int tensor, in which categories[i] denotes the
-      category of i-th topic, value 0 indicates 'unclear' category.
-  """
-  batch_size = categories.get_shape()[0].value
-  if batch_size is None:
-    batch_size = tf.shape(categories)[0]
-
-  categories = tf.expand_dims(categories, 0)
-  boolean_masks = tf.not_equal(categories, tf.transpose(categories))
-
-  unclear_masks = tf.tile(tf.equal(categories, 0), [batch_size, 1])
-  unclear_masks = tf.logical_or(unclear_masks, tf.transpose(unclear_masks))
-  boolean_masks = tf.logical_and(
-      boolean_masks, tf.logical_not(unclear_masks))
-
-  indices = tf.where(boolean_masks)
-  return indices[:, 0], indices[:, 1]
-
-
-def _mine_random_negatives(positives):
-  """Mine negative examples from positive examples.
-
-  Args:
-    positives: a [batch, embedding_size] tensor indicating positive examples.
-
-  Returns:
-    negatives: a [batch, embedding_size] tensor indicating negative examples.
-  """
-  batch_size = positives.get_shape()[0].value
-  indices = tf.add(
-      tf.range(batch_size, dtype=tf.int64),
-      tf.random_uniform(
-        shape=[batch_size], minval=1, maxval=batch_size, dtype=tf.int64))
-  indices = tf.mod(indices, batch_size)
-  return tf.gather(positives, indices)
-
- 
-def _stack_embedding_vectors(embs, num_replicas=1, is_negative=False):
-  """Stack embedding vectors.
-
-  Args:
-    embs: a [batch, embedding_size] tensor.
-    num_replicas: number of replicas in the batch.
-    is_negative: is True, stack random negatives instead of original examples.
-  """
-  stacked_embs = []
-  for _ in xrange(num_replicas):
-    if not is_negative:
-      stacked_embs.append(embs)
-    else:
-      stacked_embs.append(_mine_random_negatives(embs))
-  return tf.concat(stacked_embs, 0)
+  for k, v in loss_summaries.iteritems():
+    key = k + '_%s_%s' % (anchor_name, positive_name)
+    tf.summary.scalar(key, v)
+  return loss_summaries['losses/triplet_loss']
 
 
 class AdsEmbModel(object):
@@ -186,6 +127,12 @@ class AdsEmbModel(object):
     if model_proto.HasField('topic_encoder'):
       self.topic_encoder = text_encoder_builder.build(
           model_proto.topic_encoder)
+
+    # Symbol encoder.
+    self.symbol_encoder = None
+    if model_proto.HasField('symbol_encoder'):
+      self.symbol_encoder = text_encoder_builder.build(
+          model_proto.symbol_encoder)
 
     # Densecap encoder.
     self.densecap_encoder = None
@@ -286,48 +233,6 @@ class AdsEmbModel(object):
         images, boxes, box_ind, crop_size)
     return boolean_masks, proposed_images
 
-#  def embed_feature(self, feature_vectors, is_training=True):
-#    """Use fully connections to get embedding vectors.
-#
-#    Args:
-#      feature_vectors: a [proposal_batch, feature_dims] float32 tensor.
-#      is_training: if True, use mean and variance within the batch.
-#
-#    Returns:
-#      embeddings: a [proposal_batch, embedding_size] float32 tensor.
-#    """
-#
-#    model_proto = self.model_proto
-#
-#    fc_hyperparams = hyperparams_builder.build(
-#        model_proto.fc_hyperparams,
-#        is_training=is_training)
-#    pred_hyperparams = hyperparams_builder.build(
-#        model_proto.pred_hyperparams,
-#        is_training=is_training)
-#
-#    tf.logging.info('*' * 128)
-#    with slim.arg_scope(fc_hyperparams):
-#      node = feature_vectors
-#      for i in xrange(model_proto.fc_hidden_layers):
-#        node = slim.fully_connected(node, 
-#            num_outputs=model_proto.fc_hidden_units,
-#            scope='image_encoder/hidden_%d' % (i))
-#        if is_training:
-#          node = tf.nn.dropout(node, model_proto.fc_dropout_keep_prob)
-#        tf.logging.info('%s: %s', node.op.name, node.get_shape().as_list())
-#
-#    with slim.arg_scope(pred_hyperparams):
-#      node = slim.fully_connected(node, 
-#          num_outputs=model_proto.embedding_size,
-#          scope='image_encoder/project')
-#      if model_proto.pred_activation_fn == ads_emb_model_pb2.AdsEmbModel.SIGMOID:
-#        node = tf.sigmoid(node)
-#
-#      tf.logging.info('%s: %s', node.op.name, node.get_shape().as_list())
-#
-#    return node
-
   def _average_proposed_embs(self, proposed_embs, boolean_masks,
       proposed_scores=None):
     """Average proposed embedding vectors to get embedding vector of an image.
@@ -383,8 +288,13 @@ class AdsEmbModel(object):
     tf.summary.scalar('detection/num_detections', 
         tf.reduce_mean(tf.cast(num_detections, tf.float32)))
 
+    self.add_tensor('num_detections', num_detections)
+
     # Get features from region proposals.
     batch_size, max_detections, _ = proposed_features.get_shape().as_list()
+    if max_detections is None:
+      max_detections = tf.cast(tf.shape(proposed_features)[1], tf.int64)
+
     boolean_masks = tf.less(
       tf.range(max_detections, dtype=tf.int64),
       tf.expand_dims(tf.cast(num_detections, dtype=tf.int64), 1))
@@ -416,6 +326,7 @@ class AdsEmbModel(object):
           proposed_features, is_training=is_training)
       proposed_scores = tf.nn.embedding_lookup(proposed_scores, lookup)
       proposed_scores = tf.nn.softmax(tf.squeeze(proposed_scores, [2]))
+      self.add_tensor('proposed_scores', proposed_scores)
 
     image_embs = self._average_proposed_embs(proposed_embs, boolean_masks,
         proposed_scores)
@@ -581,15 +492,9 @@ class AdsEmbModel(object):
       is_training: if True, update batch norm parameters.
 
     Returns:
-      topic_embs: a [a batch, embedding_size] float32 tensor.
+      topic_embs: a [batch, embedding_size] float32 tensor.
       assign_fn: a function used to initialize weights from checkpoint.
-
-    Raises:
-      ValueError: if topic_encoder is disabled.
     """
-    if self.topic_encoder is None:
-      raise ValueError('topic_encoder is disabled.')
-
     topic_lengths = tf.ones(shape=topics.get_shape(), dtype=tf.int64)
     topic_strings = tf.expand_dims(topics, 1)
 
@@ -601,7 +506,29 @@ class AdsEmbModel(object):
 
     return topic_embs, _assign_fn
 
-  def _mine_related_captions(self, num_captions):
+  def build_symbol_model(self, symbols, is_training):
+    """Get symbol embedding vectors.
+
+    Args:
+      symbols: a [batch] int 64 tensor indicating symbols.
+      is_training: if True, update batch norm parameters.
+
+    Returns:
+      symbol_embs: a [batch, embedding_size] float32 tensor.
+      assign_fn: a function used to initialize weights from checkpoint.
+    """
+    symbol_lengths = tf.ones(shape=symbols.get_shape(), dtype=tf.int64)
+    symbol_strings = tf.expand_dims(symbols, 1)
+
+    symbol_embs = self.symbol_encoder.encode(
+        symbol_lengths, symbol_strings, is_training=is_training)
+
+    def _assign_fn(sess):
+      tf.logging.info('Empty symbol assign_fn is called.')
+
+    return symbol_embs, _assign_fn
+
+  def _mine_related_examples(self, num_captions):
     """Returns random selected indices.
   
     Args:
@@ -621,7 +548,7 @@ class AdsEmbModel(object):
   def build(self, images, 
       num_captions, caption_lengths, caption_strings, 
       num_detections, proposed_features,
-      topics,
+      topics, num_symbols, symbols,
       densecap_num_captions, densecap_caption_lengths, densecap_caption_strings,
       is_training=True):
     """Builds ads embedding model.
@@ -634,6 +561,8 @@ class AdsEmbModel(object):
       num_detections: a [batch] int64 tensor.
       proposed_features: a [batch, max_detections, feature_size] float tensor.
       topics: a [batch] int64 tensor.
+      num_symbols: a [batch] int64 tensor.
+      symbols: a [batch, max_num_symbols] tensor.
       densecap_num_captions: a [batch] int64 tensor.
       densecap_caption_lengths: a [batch, densecap_max_num_captions] int64 tensor.
       densecap_caption_strings: a [batch, densecap_max_num_captions, densecap_max_caption_len] int64 tensor.
@@ -657,16 +586,13 @@ class AdsEmbModel(object):
     self.add_tensor('image_embs', image_embs)
 
     # Caption model.
-    caption_indices = self._mine_related_captions(num_captions)
+    caption_indices = self._mine_related_examples(num_captions)
     caption_lengths = tf.gather_nd(caption_lengths, caption_indices)
     caption_strings = tf.gather_nd(caption_strings, caption_indices)
 
     caption_embs, assign_fn_txt = self.build_caption_model(
         caption_lengths, caption_strings, 
         is_training=is_training)
-
-    #if model_proto.extra_relu6_during_training: 
-    #  image_embs = tf.nn.relu6(image_embs)
 
     if model_proto.normalize_image_embedding:
       image_embs = unit_norm(image_embs)
@@ -688,13 +614,10 @@ class AdsEmbModel(object):
             model_proto.num_negative_examples)
       triplet_mining_fn = _mine_hard_examples
 
-    assert triplet_mining_fn is not None
+    elif method == ads_emb_model_pb2.AdsEmbModel.SEMI_HARD:
+      triplet_mining_fn = triplet_loss.mine_semi_hard_examples
 
-    distances = tf.reduce_sum(
-        tf.squared_difference(
-          tf.expand_dims(image_embs, 1), 
-          tf.expand_dims(caption_embs, 0), 
-          ), 2)
+    assert triplet_mining_fn is not None
 
     # Get the distance measuring function.
     def _distance_fn_with_dropout(x, y):
@@ -704,37 +627,132 @@ class AdsEmbModel(object):
             model_proto.joint_emb_dropout_keep_prob)
       return 1 - tf.reduce_sum(joint_emb, axis=1)
 
-    triplet_loss_summaries = {}
-
-    # Use image as anchor.
-    pos_indices, neg_indices = triplet_mining_fn(distances)
-    loss_summaries = triplet_loss.compute_triplet_loss(
-        anchors=tf.gather(image_embs, pos_indices), 
-        positives=tf.gather(caption_embs, pos_indices), 
-        negatives=tf.gather(caption_embs, neg_indices),
+    # Use image as anchor: related statements should be more similar.
+    loss = _triplet_loss_wrapper(
+        image_embs, caption_embs, 
+        mine_fn=triplet_mining_fn, 
+        refine_fn=None, 
         distance_fn=_distance_fn_with_dropout,
-        alpha=model_proto.triplet_alpha)
-    for k, v in loss_summaries.iteritems():
-      triplet_loss_summaries[k + '_img_cap'] = v
+        margin=model_proto.triplet_alpha, 
+        anchor_name='img', 
+        positive_name='cap')
+    tf.losses.add_loss(loss)
 
-    # Use caption as anchor.
-    pos_indices, neg_indices = triplet_mining_fn(
-        tf.transpose(distances, [1, 0]))
-    loss_summaries = triplet_loss.compute_triplet_loss(
-        anchors=tf.gather(caption_embs, pos_indices), 
-        positives=tf.gather(image_embs, pos_indices), 
-        negatives=tf.gather(image_embs, neg_indices),
+    # Use caption as anchor: related images should be more similar.
+    loss = _triplet_loss_wrapper(
+        caption_embs, image_embs, 
+        mine_fn=triplet_mining_fn, 
+        refine_fn=None, 
         distance_fn=_distance_fn_with_dropout,
-        alpha=model_proto.triplet_alpha)
-    for k, v in loss_summaries.iteritems():
-      triplet_loss_summaries[k + '_cap_img'] = v
+        margin=model_proto.triplet_alpha, 
+        anchor_name='cap', 
+        positive_name='img')
+    tf.losses.add_loss(loss)
 
-    tf.losses.add_loss(triplet_loss_summaries['losses/triplet_loss_img_cap'])
-    tf.losses.add_loss(triplet_loss_summaries['losses/triplet_loss_cap_img'])
+    # Topic model.
+    if self.topic_encoder is not None:
+
+      topic_embs, _ = self.build_topic_model(topics, is_training=is_training)
+      topic_embs = unit_norm(topic_embs)
+
+      def _refine_topic_triplets(pos_indices, neg_indices):
+        """Refine topic triplets.
+
+        1. Positive and negative example should be from different topics.
+        2. Topic of positive example could not be 'unclear' (0).
+
+        Args:
+          pos_indices: a [triplet_batch] int32 tensor denoting index.
+          neg_indices: a [triplet_batch] int32 tensor denoting index.
+        """
+        pos_topics = tf.gather(topics, pos_indices)
+        neg_topics = tf.gather(topics, neg_indices)
+        #masks = tf.logical_and(
+        #    tf.not_equal(pos_topics, neg_topics),
+        #    tf.not_equal(pos_topics, 0))
+        masks = tf.not_equal(pos_topics, 0)
+        pos_indices = tf.boolean_mask(pos_indices, masks)
+        neg_indices = tf.boolean_mask(neg_indices, masks)
+        return pos_indices, neg_indices
+
+      # Use topic as anchor: images from the same topic should be more similar.
+      loss = _triplet_loss_wrapper(
+          topic_embs, image_embs, 
+          mine_fn=triplet_mining_fn, 
+          refine_fn=_refine_topic_triplets, 
+          distance_fn=_distance_fn_with_dropout,
+          margin=model_proto.triplet_alpha, 
+          anchor_name='topic', 
+          positive_name='img')
+      tf.losses.add_loss(loss * model_proto.loss_weight_topic)
+
+      # Use topic as anchor: captions from the same topic should be more similar.
+      loss = _triplet_loss_wrapper(
+          topic_embs, caption_embs, 
+          mine_fn=triplet_mining_fn, 
+          refine_fn=_refine_topic_triplets, 
+          distance_fn=_distance_fn_with_dropout,
+          margin=model_proto.triplet_alpha, 
+          anchor_name='topic', 
+          positive_name='cap')
+      tf.losses.add_loss(loss * model_proto.loss_weight_topic)
+
+    # Symbol model.
+    if self.symbol_encoder is not None:
+      num_symbols = tf.maximum(num_symbols, 1)
+      #self.add_tensor('num_symbols', num_symbols)
+
+      symbol_indices = self._mine_related_examples(num_symbols)
+      symbols = tf.gather_nd(symbols, symbol_indices)
+
+      symbol_embs, _ = self.build_symbol_model(symbols, is_training=is_training)
+      symbol_embs = unit_norm(symbol_embs)
+
+      def _refine_symbol_triplets(pos_indices, neg_indices):
+        """Refine symbol triplets.
+
+        1. Positive and negative example should be from different symbols.
+        2. Topic of positive example could not be 'unclear' (0).
+
+        Args:
+          pos_indices: a [triplet_batch] int32 tensor denoting index.
+          neg_indices: a [triplet_batch] int32 tensor denoting index.
+        """
+        pos_symbols = tf.gather(symbols, pos_indices)
+        neg_symbols = tf.gather(symbols, neg_indices)
+        #masks = tf.logical_and(
+        #    tf.not_equal(pos_symbols, neg_symbols),
+        #    tf.not_equal(pos_symbols, 0))
+        masks = tf.not_equal(pos_symbols, 0)
+        pos_indices = tf.boolean_mask(pos_indices, masks)
+        neg_indices = tf.boolean_mask(neg_indices, masks)
+        return pos_indices, neg_indices
+
+      # Use symbol as anchor: images from the same symbol should be more similar.
+      loss = _triplet_loss_wrapper(
+          symbol_embs, image_embs, 
+          mine_fn=triplet_mining_fn, 
+          refine_fn=_refine_symbol_triplets, 
+          distance_fn=_distance_fn_with_dropout,
+          margin=model_proto.triplet_alpha, 
+          anchor_name='sym', 
+          positive_name='img')
+      tf.losses.add_loss(loss * model_proto.loss_weight_symbol)
+
+      # Use symbol as anchor: captions from the same symbol should be more similar.
+      loss = _triplet_loss_wrapper(
+          symbol_embs, caption_embs, 
+          mine_fn=triplet_mining_fn, 
+          refine_fn=_refine_symbol_triplets, 
+          distance_fn=_distance_fn_with_dropout,
+          margin=model_proto.triplet_alpha, 
+          anchor_name='sym', 
+          positive_name='cap')
+      tf.losses.add_loss(loss * model_proto.loss_weight_symbol)
 
     # Densecap model.
     if self.densecap_encoder is not None:
-      densecap_caption_indices = self._mine_related_captions(densecap_num_captions)
+      densecap_caption_indices = self._mine_related_examples(densecap_num_captions)
       densecap_caption_lengths = tf.gather_nd(
           densecap_caption_lengths, densecap_caption_indices)
       densecap_caption_strings = tf.gather_nd(
@@ -744,41 +762,31 @@ class AdsEmbModel(object):
           densecap_caption_lengths, densecap_caption_strings, is_training=is_training)
       densecap_caption_embs = unit_norm(densecap_caption_embs)
 
-      distances = tf.reduce_sum(
-          tf.squared_difference(
-            tf.expand_dims(image_embs, 1), 
-            tf.expand_dims(densecap_caption_embs, 0), 
-            ), 2)
-
-      # Use image as anchor.
-      pos_indices, neg_indices = triplet_mining_fn(distances)
-      loss_summaries = triplet_loss.compute_triplet_loss(
-          anchors=tf.gather(image_embs, pos_indices), 
-          positives=tf.gather(densecap_caption_embs, pos_indices), 
-          negatives=tf.gather(densecap_caption_embs, neg_indices),
+      # Use image as anchor: related densecap captions should be more similar.
+      loss = _triplet_loss_wrapper(
+          image_embs, densecap_caption_embs, 
+          mine_fn=triplet_mining_fn, 
+          refine_fn=None, 
           distance_fn=_distance_fn_with_dropout,
-          alpha=model_proto.triplet_alpha)
-      for k, v in loss_summaries.iteritems():
-        triplet_loss_summaries[k + '_img_densecap'] = v
+          margin=model_proto.triplet_alpha, 
+          anchor_name='img', 
+          positive_name='densecap')
+      tf.losses.add_loss(loss * model_proto.loss_weight_densecap)
 
-      # Use caption as anchor.
-      pos_indices, neg_indices = triplet_mining_fn(
-          tf.transpose(distances, [1, 0]))
-      loss_summaries = triplet_loss.compute_triplet_loss(
-          anchors=tf.gather(densecap_caption_embs, pos_indices), 
-          positives=tf.gather(image_embs, pos_indices), 
-          negatives=tf.gather(image_embs, neg_indices),
+      # Use densecap as anchor: related images should be more similar.
+      loss = _triplet_loss_wrapper(
+          densecap_caption_embs, image_embs,
+          mine_fn=triplet_mining_fn, 
+          refine_fn=None, 
           distance_fn=_distance_fn_with_dropout,
-          alpha=model_proto.triplet_alpha)
-      for k, v in loss_summaries.iteritems():
-        triplet_loss_summaries[k + '_densecap_img'] = v
-
-      tf.losses.add_loss(model_proto.loss_weight_densecap * triplet_loss_summaries['losses/triplet_loss_img_densecap'])
-      tf.losses.add_loss(model_proto.loss_weight_densecap * triplet_loss_summaries['losses/triplet_loss_densecap_img'])
+          margin=model_proto.triplet_alpha, 
+          anchor_name='densecap', 
+          positive_name='img')
+      tf.losses.add_loss(loss * model_proto.loss_weight_densecap)
 
     def _assign_fn(sess):
       if assign_fn_img is not None:
         assign_fn_img(sess)
       assign_fn_txt(sess)
 
-    return triplet_loss_summaries, _assign_fn
+    return _assign_fn
