@@ -11,8 +11,12 @@ class NMSProcessor(object):
       max_output_size: maximum number of boxes to maintain.
       iou_threshold: threhold for intersection over union.
     """
-    self._sess = tf.Session()
+    config = tf.ConfigProto()
+    config.allow_soft_placement = True
+    config.gpu_options.allow_growth = True
+    config.gpu_options.per_process_gpu_memory_fraction = 0.5
 
+    self._sess = tf.Session(config=config)
     self._boxes = tf.placeholder(dtype=tf.float32, shape=[None, 4])
     self._scores= tf.placeholder(dtype=tf.float32, shape=[None])
 
@@ -31,5 +35,6 @@ class NMSProcessor(object):
     Returns:
       selected_boxes: a [num_selected_boxes, 4] np array.
     """
-    return self._sess.run([self._selected_boxes, self._selected_scores],
+    return self._sess.run([
+        self._selected, self._selected_boxes, self._selected_scores],
         feed_dict={self._boxes: boxes, self._scores: scores})

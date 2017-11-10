@@ -11,6 +11,14 @@ import time
 import nltk
 from nltk.stem import PorterStemmer
 
+from sklearn.metrics import adjusted_rand_score
+from sklearn.metrics import adjusted_mutual_info_score
+from sklearn.metrics import fowlkes_mallows_score
+from sklearn.metrics import homogeneity_completeness_v_measure
+
+from scipy.cluster.hierarchy import dendrogram, linkage
+from scipy.cluster.hierarchy import fcluster
+
 from google.protobuf import text_format
 from protos import ads_emb_model_pb2
 
@@ -45,11 +53,26 @@ flags.DEFINE_integer('max_vis_examples', 1000, 'Maximum number of examples to vi
 flags.DEFINE_boolean('continuous_evaluation', True, 
     'If true, continously evaluate the latest model. Otherwise, evalute the current best model only.')
 
+flags.DEFINE_boolean('old_data', False, '')
+flags.DEFINE_string('eval_task', 'STATEMENT', 'Eval task, one of STATEMENT, HARD_STATEMENT, and SLOGAN.')
+flags.DEFINE_boolean('cluster_task', True, '')
+flags.DEFINE_integer('num_clusters', 100, 'Number of clusters.')
+
 slim = tf.contrib.slim
 ckpt_path = None
 
 topic_to_name = None
 symbol_to_name = None
+
+PSAs = ['environment', 
+     'animal_right', 
+     'human_right', 
+     'safety', 
+     'smoking_alcohol_abuse', 
+     'domestic_violence', 
+     'self_esteem', 
+     'political', 
+     'charities']
 
 def load_vocab(vocab_path):
   """Load vocabulary from file.
@@ -89,29 +112,39 @@ def _tokenize(caption):
 
 
 def visualize(global_step, vis_examples):
-  html = ''
-  html += '<html>'
-  html += '<table border=1>'
+  if FLAGS.continuous_evaluation:
+    vis_path = os.path.join(FLAGS.saved_ckpts_dir, 'vis.html')
+  else:
+    vis_path = os.path.join(
+        FLAGS.saved_ckpts_dir, 'vis_final.%s.html' % (FLAGS.eval_task.lower()))
+  fp = open(vis_path, 'w')
 
-  html += '<tr>'
-  html += '<th>Image ID</th>'
-  html += '<th>Image Data</th>'
+  fp.write('<html>')
+  fp.write('<table border=1>')
+
+  fp.write('<tr>')
+  fp.write('<th>Image ID</th>')
+  fp.write('<th>Image Data</th>')
+
   #if 'proposed_boxes' in vis_examples[0]:
   #  html += '<th>Refined boxes</th>'
   if 'scores_topic' in vis_examples[0]:
-    html += '<th>Topics</th>'
+    fp.write('<th>Topics</th>')
   if 'scores_symbol' in vis_examples[0]:
-    html += '<th>Symbols</th>'
-  html += '<th>Statements</th>'
-  html += '</tr>'
+    fp.write('<th>Symbols</th>')
+  if 'scores_densecap' in vis_examples[0]:
+    fp.write('<th>Densecap words</th>')
+  fp.write('<th>Statements</th>')
+  fp.write('</tr>')
 
   for example_index, example in enumerate(vis_examples):
-    html += '<tr id="%s">' % (example['image_id'])
+    fp.write('<tr id="%s">' % (example['image_id']))
     if example_index % 10 == 0:
       tf.logging.info('Vis on image %d/%d.', example_index, len(vis_examples))
 
     # Anchor for the image_id.
-    html += '<td><a href="#%s">%s</a></td>' % (example['image_id'], example['image_id'])
+    fp.write('<td><a href="#%s">%s</a></td>' % (
+          example['image_id'], example['image_id']))
 
     # Image with proposal annotations.
     image = np.copy(example['image'])
@@ -123,8 +156,8 @@ def visualize(global_step, vis_examples):
             '%.3lf' % (1.0 if 'proposed_scores' not in example 
               else float(example['proposed_scores'][0, obj_index])),
             color=(0, 0, 0))
-    html += '<td><img src="data:image/jpg;base64,%s"></td>' % (
-        vis.image_uint8_to_base64(image, convert_to_bgr=True))
+    fp.write('<td><img src="data:image/jpg;base64,%s"></td>' % (
+        vis.image_uint8_to_base64(image, convert_to_bgr=True)))
 
     #if 'proposed_boxes' in example:
     #  image = cv2.resize(example['image'], (500, 500))
@@ -140,32 +173,40 @@ def visualize(global_step, vis_examples):
 
     # Topic predictions.
     if 'scores_topic' in example:
-      html += '<td>'
+      fp.write('<td>')
       scores = example['scores_topic']
       for topic_id in scores.argsort()[:20]:
         if topic_id == example['topic_id']:
-          html += '<p style="background-color:Yellow">[%.4lf] %s</p>' % (
-              scores[topic_id], topic_to_name[topic_id])
+          fp.write('<p style="background-color:Yellow">[%.4lf] %s</p>' % (
+              scores[topic_id], topic_to_name[topic_id]))
         else:
-          html += '<p>[%.4lf] %s</p>' % (
-              scores[topic_id], topic_to_name[topic_id])
-      html += '</td>'
+          fp.write('<p>[%.4lf] %s</p>' % (
+              scores[topic_id], topic_to_name[topic_id]))
+      fp.write('</td>')
 
     if 'scores_symbol' in example:
-      html += '<td>'
+      fp.write('<td>')
       scores = example['scores_symbol']
       for symbol_id in scores.argsort()[:20]:
         if symbol_id in example['symbol_ids']:
-          html += '<p style="background-color:Yellow">[%.4lf] %s</p>' % (
-              scores[symbol_id], symbol_to_name[symbol_id])
+          fp.write('<p style="background-color:Yellow">[%.4lf] %s</p>' % (
+              scores[symbol_id], symbol_to_name[symbol_id]))
         else:
-          html += '<p>[%.4lf] %s</p>' % (
-              scores[symbol_id], symbol_to_name[symbol_id])
-      html += '</td>'
+          fp.write('<p>[%.4lf] %s</p>' % (
+              scores[symbol_id], symbol_to_name[symbol_id]))
+      fp.write('</td>')
+
+    if 'scores_densecap' in example:
+      fp.write('<td>')
+      scores = example['scores_densecap']
+      for densecap_id in scores.argsort()[:20]:
+        fp.write('<p>[%.4lf] %s</p>' % (
+            scores[densecap_id], vocab[densecap_id]))
+      fp.write('</td>')
 
     # Statements with similarity scores.
-    html += '<td>'
-    statements = []
+    fp.write('<td>')
+    captions = []
     scores = example['scores']
     caption_strings = example['caption_strings']
     caption_lengths = example['caption_lengths']
@@ -173,24 +214,30 @@ def visualize(global_step, vis_examples):
     for i in xrange(caption_lengths.shape[0]):
       caption_string = caption_strings[i]
       caption_length = int(caption_lengths[i])
-      statement = [vocab[wid] for wid in caption_string[:caption_length]]
-      statements.append((' '.join(statement)))
+      caption = [vocab[wid] for wid in caption_string[:caption_length]]
+      captions.append((' '.join(caption)))
 
     for index in scores.argsort():
       if index >= FLAGS.num_positive_statements:
-        html += '<p>[%.4lf] %s</p>' % (scores[index], statements[index])
+        fp.write('<p>[%.4lf] %s</p>' % (scores[index], captions[index]))
       else:
-        html += '<p style="background-color:Yellow">[%.4lf] %s</p>' % (
-            scores[index], statements[index])
-    html += '</td>'
+        fp.write('<p style="background-color:Yellow">[%.4lf] %s</p>' % (
+            scores[index], captions[index]))
+    fp.write('</td>')
 
-    html += '</tr>'
-  html += '</table>'
-  html += '</html>'
+    fp.write('</tr>')
+  fp.write('</table>')
+  fp.write('</html>')
 
-  vis_path = os.path.join(FLAGS.saved_ckpts_dir, 'vis.html')
-  with open(vis_path, 'w') as fp:
-    fp.write(html)
+  #if FLAGS.continuous_evaluation:
+  #  vis_path = os.path.join(FLAGS.saved_ckpts_dir, 'vis.html')
+  #else:
+  #  vis_path = os.path.join(
+  #      FLAGS.saved_ckpts_dir, 'vis_final.%s.html' % (FLAGS.eval_task.lower()))
+
+  fp.close()
+  #with open(vis_path, 'w') as fp:
+  #  fp.write(html)
   tf.logging.info('Visualize model at global step %s.', global_step)
 
 
@@ -214,13 +261,34 @@ def evaluate_once(sess, writer, global_step,
   # Multi-choice metrics.
   recalls = {3: [], 5: [], 10:[]}
   recalls_cat = {}
+  recalls_type = {}
 
   minrank = []
   minrank_cat = {}
+  minrank_type = {}
+
+  topics = sorted([v for k, v in topic_to_name.iteritems()])
+  for topic in sorted(topics):
+    recalls_cat.setdefault(topic, {3: [], 5: [], 10:[]})
+    minrank_cat.setdefault(topic, [])
 
   # Topic-prediction metrics.
   precision = []
   precision_cat = {}
+
+  if FLAGS.eval_task == 'STATEMENT':
+    caption_strings_key = 'statement_strings'
+    caption_lengths_key = 'statement_lengths'
+  elif FLAGS.eval_task == 'HARD_STATEMENT':
+    caption_strings_key = 'hard_statement_strings'
+    caption_lengths_key = 'hard_statement_lengths'
+  else:
+    caption_strings_key = 'slogan_strings'
+    caption_lengths_key = 'slogan_lengths'
+
+  # For clustering.
+  image_emb_list = []
+  topic_list = []
 
   vis_examples = []
   for example_id, example in enumerate(eval_data):
@@ -228,26 +296,44 @@ def evaluate_once(sess, writer, global_step,
     result = sess.run(result_dict, feed_dict={
         eval_placeholders['object_num']: example['num_detections'],
         eval_placeholders['object_features']: example['proposed_features'],
-        eval_placeholders['caption_strings']: example['caption_strings'],
-        eval_placeholders['caption_lengths']: example['caption_lengths'],
+        eval_placeholders['caption_strings']: example[caption_strings_key],
+        eval_placeholders['caption_lengths']: example[caption_lengths_key],
         })
 
+    # Gathering data for clustering.
+    if FLAGS.cluster_task:
+      if example.get('topic_id', 0) != 0:
+        image_emb_list.append(result['image_emb'])
+        topic_list.append(example['topic_id'])
+
+    # Logging and visualization.
     if example_id % 50 == 0:
       tf.logging.info('On image %d of %d.', example_id, len(eval_data))
 
     if len(vis_examples) < FLAGS.max_vis_examples:
-      vis_example = example
-      vis_example['objects'] = example['objects']
-      vis_example['scores'] = result['scores']
+      objects = [{'xmin': 0.0, 'ymin': 0.0, 'xmax': 1.0, 'ymax': 1.0}] + example['objects'][:-1]
+      vis_example = {
+        'image_id': example['image_id'],
+        'image': example['image'],
+        'topic_id': example.get('topic_id', 0),
+        'topic': example.get('topic_name', 'unclear'),
+        'symbol_ids': example.get('symbol_ids', []),
+        'caption_strings': example[caption_strings_key],
+        'caption_lengths': example[caption_lengths_key],
+        'objects': objects,
+        'scores': result['scores']
+      }
       if 'proposed_scores' in result:
         vis_example['proposed_scores'] = result['proposed_scores']
       if 'scores_topic' in result:
         vis_example['scores_topic'] = result['scores_topic']
       if 'scores_symbol' in result:
         vis_example['scores_symbol'] = result['scores_symbol']
+      if 'scores_densecap' in result:
+        vis_example['scores_densecap'] = result['scores_densecap']
       vis_examples.append(vis_example)
 
-    # Multi-choice task.
+    # Multi-choice task of statements.
     scores = result['scores']
     for at_k in recalls.keys():
       recall = (scores.argsort()[:at_k] < FLAGS.num_positive_statements).sum()
@@ -255,9 +341,19 @@ def evaluate_once(sess, writer, global_step,
       recalls[at_k].append(recall)
       recalls_cat.setdefault(example['topic'], {3: [], 5: [], 10:[]})[at_k].append(recall)
 
+      if example['topic'] in PSAs:
+        recalls_type.setdefault('psa', {3: [], 5: [], 10:[]})[at_k].append(recall)
+      elif example['topic'] != 'unclear':
+        recalls_type.setdefault('prod', {3: [], 5: [], 10:[]})[at_k].append(recall)
+
     rank = np.where(scores.argsort() < 3)[0]
     minrank.append(float(rank.min()))
     minrank_cat.setdefault(example['topic'], []).append(float(rank.min()))
+
+    if example['topic'] in PSAs:
+      minrank_type.setdefault('psa', []).append(float(rank.min()))
+    elif example['topic'] != 'unclear':
+      minrank_type.setdefault('prod', []).append(float(rank.min()))
 
     # Topic-prediction task.
     if 'scores_topic' in result:
@@ -268,7 +364,7 @@ def evaluate_once(sess, writer, global_step,
       precision_cat.setdefault(example['topic'], []).append(correct)
 
   # Use recall@3 as the metric to pick the best model.
-  model_metric = 1.0 * sum(recalls[3]) / len(recalls[3])
+  model_metric = 1.0 * sum(recalls[3]) / max(len(recalls[3]), 1e-12)
 
   # Write summary.
   if writer is not None:
@@ -347,6 +443,76 @@ def evaluate_once(sess, writer, global_step,
 
   # Write eval results.
   else:
+    if FLAGS.cluster_task:
+      image_embs = np.stack(image_emb_list, axis=0)
+
+      Z = linkage(image_embs, method='average', metric='cosine')
+      labels_pred = fcluster(Z, FLAGS.num_clusters, criterion='maxclust')
+      labels_true = np.array(topic_list)
+
+      homogeneity, completeness, v_measure = homogeneity_completeness_v_measure(
+          labels_true, labels_pred)
+      fowlkes_mallows = fowlkes_mallows_score(labels_true, labels_pred)
+      mutual_info = adjusted_mutual_info_score(labels_true, labels_pred)
+      rand_score = adjusted_rand_score(labels_true, labels_pred)
+      
+      result_file = os.path.join(FLAGS.saved_ckpts_dir, 'clustering_eval.csv')
+      with open(result_file, 'w') as fp:
+        fp.write('homogeneity,completeness,v_measure,fowlkes_mallows,mutual_info,rand_score\n')
+        fp.write('%.4lf,%.4lf,%.4lf,%.4lf,%.4lf,%.4lf\n' % (
+              homogeneity, completeness, v_measure, fowlkes_mallows,
+              mutual_info, rand_score))
+      tf.logging.info('clustering info is written to %s.', result_file)
+
+    # The new csv file.
+    result_file = os.path.join(
+        FLAGS.saved_ckpts_dir, 'model_eval_ex.%s.csv' % (FLAGS.eval_task.lower()))
+    with open(result_file, 'w') as fp:
+      n_examples = len(eval_data)
+        
+      line = ''
+      for at_k in sorted(recalls.keys()):
+        line += ',recall@%d' % (at_k) if line != '' else 'recall@%d' % (at_k)
+      line += ',minrank'
+      for adstype in sorted(recalls_type.keys()):
+        for at_k in sorted(recalls_type[adstype].keys()):
+          line += ',%s recall@%d' % (adstype, at_k)
+        line += ',%s minrank' % (adstype)
+      for topic in sorted(recalls_cat.keys()):
+        for at_k in sorted(recalls_cat[topic].keys()):
+          line += ',%s recall@%d' % (topic, at_k)
+        line += ',%s minrank' % (topic)
+      fp.write(line + '\n')
+
+      for i in xrange(n_examples):
+        line = ''
+
+        # General recall and minrank.
+        for at_k in sorted(recalls.keys()):
+          value = '%d' % (recalls[at_k][i]) if i < len(recalls[at_k]) else ''
+          line += ',' + value if line != '' else value
+        value = '%d' % (minrank[i]) if i < len(minrank) else ''
+        line += ',' + value
+
+        # Type recall and minrank.
+        for adstype in sorted(recalls_type.keys()):
+          for at_k in sorted(recalls_type[adstype].keys()):
+            value = '%d' % (recalls_type[adstype][at_k][i]) if i < len(recalls_type[adstype][at_k]) else ''
+            line += ',' + value
+          value = '%d' % (minrank_type[adstype][i]) if i < len(minrank_type[adstype]) else ''
+          line += ',' + value
+
+        # Category recall and minrank.
+        for topic in sorted(recalls_cat.keys()):
+          for at_k in sorted(recalls_cat[topic].keys()):
+            value = '%d' % (recalls_cat[topic][at_k][i]) if i < len(recalls_cat[topic][at_k]) else ''
+            line += ',' + value
+          value = '%d' % (minrank_cat[topic][i]) if i < len(minrank_cat[topic]) else ''
+          line += ',' + value
+
+        fp.write(line + '\n')
+
+    # Origianl csv file.
     result_file = os.path.join(FLAGS.saved_ckpts_dir, 'model_eval.csv')
     with open(result_file, 'w') as fp:
       for at_k in sorted(recalls.keys()):
@@ -356,9 +522,9 @@ def evaluate_once(sess, writer, global_step,
 
       fp.write('general')
       for at_k in sorted(recalls.keys()):
-        recall = 1.0 * sum(recalls[at_k]) / len(recalls[at_k])
+        recall = 1.0 * sum(recalls[at_k]) / max(len(recalls[at_k]), 1e-8)
         fp.write(',%.4lf' % (recall))
-      minrank = 1.0 * sum(minrank) / len(minrank)
+      minrank = 1.0 * sum(minrank) / max(len(minrank), 1e-8)
       fp.write(',%.4lf' % (minrank))
       fp.write('\n')
 
@@ -369,19 +535,19 @@ def evaluate_once(sess, writer, global_step,
         recalls = recalls_cat[topic]
         minrank = minrank_cat[topic]
         for at_k in sorted(recalls.keys()):
-          recall = 1.0 * sum(recalls[at_k]) / len(recalls[at_k])
+          recall = 1.0 * sum(recalls[at_k]) / max(len(recalls[at_k]), 1e-8)
           recalls_avg[at_k].append(recall)
           fp.write(',%.4lf' % (recall))
-        minrank = 1.0 * sum(minrank) / len(minrank)
+        minrank = 1.0 * sum(minrank) / max(len(minrank), 1e-8)
         fp.write(',%.4lf' % (minrank))
         minrank_avg.append(minrank)
         fp.write('\n')
 
       fp.write('averaged')
       for at_k in sorted(recalls_avg.keys()):
-        recall = 1.0 * sum(recalls_avg[at_k]) / len(recalls_avg[at_k])
+        recall = 1.0 * sum(recalls_avg[at_k]) / max(len(recalls_avg[at_k]), 1e-8)
         fp.write(',%.4lf' % (recall))
-      minrank = 1.0 * sum(minrank_avg) / len(minrank_avg)
+      minrank = 1.0 * sum(minrank_avg) / max(len(minrank_avg), 1e-8)
       fp.write(',%.4lf' % (minrank))
       fp.write('\n')
 
@@ -419,8 +585,11 @@ def evaluate_best_model(sess, saver, writer, global_step,
 
   step = sess.run(global_step)
   tf.logging.info('Global step=%s.', step)
-  model_metric, _ = evaluate_once(
+
+  model_metric, vis_examples = evaluate_once(
       sess, writer, step, result_dict, eval_placeholders, eval_data)
+
+  visualize(step, vis_examples)
 
 
 def save_model_if_it_is_better(global_step, model_path, model_metric):
@@ -561,7 +730,15 @@ def _get_eval_data(raw_features, split, image_level_feature=False):
     if meta_index % 100 == 0:
       tf.logging.info('Load %d/%d.', meta_index, len(meta_list))
 
-    if 'statements' in meta and 'negative_statements' in meta:
+    cond = True
+    if FLAGS.eval_task == 'STATEMENT':
+      condition = 'statements' in meta and 'negative_statements' in meta
+    elif FLAGS.eval_task == 'HARD_STATEMENT':
+      condition = 'statements' in meta and 'hard_negative_statements' in meta
+    else:
+      condition = 'slogans' in meta
+
+    if condition:
       image_id = meta['image_id']
 
       # Topic of the image.
@@ -574,20 +751,35 @@ def _get_eval_data(raw_features, split, image_level_feature=False):
         num_detections = 1
         proposed_features = np.expand_dims(raw_feature['image_emb'], 0)
       else:
-        proposed_features = np.concatenate([
-            np.expand_dims(raw_feature['image_emb'], 0), 
-            raw_feature['object_emb_list']],
-            axis=0)[:-1]
+        if not FLAGS.old_data:
+          proposed_features = np.concatenate([
+              np.expand_dims(raw_feature['image_emb'], 0), 
+              raw_feature['object_emb_list']],
+              axis=0)[:-1]
+        else:
+          proposed_features = raw_feature['entity_emb_list']
         num_detections = proposed_features.shape[0]
 
       # Ads QA statements.
-      captions = meta['statements'] + meta['negative_statements']
-      caption_strings = np.zeros((len(captions), FLAGS.max_string_len), dtype=np.int64)
-      caption_lengths = np.zeros((len(captions)))
-      for c_index, caption in enumerate(captions):
-        caption = [vocab_r.get(w, (0, 0))[0] for w in _tokenize(caption)][:FLAGS.max_string_len]
-        caption_strings[c_index, :len(caption)] = caption
-        caption_lengths[c_index] = len(caption)
+
+      def _pad_captions(captions):
+        caption_strings = np.zeros((len(captions), FLAGS.max_string_len), dtype=np.int64)
+        caption_lengths = np.zeros((len(captions)))
+        for c_index, caption in enumerate(captions):
+          caption = [vocab_r.get(w, (0, 0))[0] for w in _tokenize(caption)][:FLAGS.max_string_len]
+          caption_strings[c_index, :len(caption)] = caption
+          caption_lengths[c_index] = len(caption)
+        return caption_strings, caption_lengths
+
+      #captions = meta['statements'] + meta['negative_statements']
+      statement_strings, statement_lengths = _pad_captions( 
+          captions=meta.get('statements', []) + meta.get('negative_statements', []))
+
+      hard_statement_strings, hard_statement_lengths = _pad_captions( 
+          captions=meta.get('statements', []) + meta.get('hard_negative_statements', []))
+
+      slogan_strings, slogan_lengths = _pad_captions(
+          captions=meta.get('slogans', []) + meta.get('negative_slogans', []))
 
       example = {
           'image_id': image_id,
@@ -598,8 +790,12 @@ def _get_eval_data(raw_features, split, image_level_feature=False):
           'topic': topic_name,
           'symbol_ids': meta.get('symbol_ids', []),
           'symbol_names': meta.get('symbol_names', []),
-          'caption_lengths': caption_lengths,
-          'caption_strings': caption_strings
+          'statement_lengths': statement_lengths,
+          'statement_strings': statement_strings,
+          'hard_statement_lengths': hard_statement_lengths,
+          'hard_statement_strings': hard_statement_strings,
+          'slogan_lengths': slogan_lengths,
+          'slogan_strings': slogan_strings
       }
 
       # Load image data.
@@ -625,6 +821,8 @@ def main(_):
   model_proto = ads_emb_model_pb2.AdsEmbModel()
   with open(FLAGS.model_config, 'r') as fp:
     text_format.Merge(fp.read(), model_proto)
+
+  assert FLAGS.eval_task in ['STATEMENT', 'HARD_STATEMENT', 'SLOGAN']
 
   g = tf.Graph()
   with g.as_default():
@@ -689,7 +887,11 @@ def main(_):
     # Get densecap word embedding vectors.
     scores_densecap = None
     if model.densecap_encoder is not None:
-      pass
+      densecap_embs = model.densecap_encoder.build_weights(
+          vocab_size=model_proto.densecap_encoder.bow_encoder.vocab_size,
+          embedding_size=model_proto.densecap_encoder.bow_encoder.embedding_size) 
+      densecap_embs = tf.nn.l2_normalize(densecap_embs, 1)
+      scores_densecap = ads_emb_model.distance_fn(image_emb, densecap_embs)
 
     global_step = slim.get_or_create_global_step()
 
@@ -720,6 +922,8 @@ def main(_):
     result_dict['scores_topic'] = scores_topic
   if scores_symbol is not None:
     result_dict['scores_symbol'] = scores_symbol
+  if scores_densecap is not None:
+    result_dict['scores_densecap'] = scores_densecap
   result_dict.update(model.tensors)
 
   def assign_fn(sess):

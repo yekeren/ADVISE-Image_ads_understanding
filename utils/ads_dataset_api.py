@@ -2,11 +2,12 @@ import os
 import sys
 import re
 import json
-import logging
 import string
 import random
 
 import numpy as np
+#import tensorflow as tf
+
 from nms_processor import NMSProcessor
 
 def is_training_example(image_id):
@@ -70,17 +71,26 @@ class AdsDatasetApi(object):
     # Regions annotated by program.
     self._entity_annotations_ex = None
 
+    # Densecap labels annotated by program.
+    self._densecap_annotations = None
+
     # Q-A actions and reasons.
     self._action_reason_annotations = None
+
+  @property
+  def topic_to_name(self):
+    return self._topic_to_name
 
   def init(self, images_dir=None, 
       topic_list_file=None, 
       topic_annot_file=None,
       entity_annot_file=None,
       entity_annot_file_ex=None,
+      densecap_annot_file=None,
       qa_action_annot_file=None,
       qa_reason_annot_file=None,
-      qa_action_reason_annot_file=None):
+      qa_action_reason_annot_file=None,
+      qa_action_reason_padding=None):
     """Initialize ads dataset api.
 
     Args:
@@ -104,11 +114,15 @@ class AdsDatasetApi(object):
     if entity_annot_file_ex is not None:
       self._index_entities_ex(entity_annot_file_ex)
 
+    if densecap_annot_file is not None:
+      self._index_densecap(densecap_annot_file)
+
     if qa_action_annot_file is not None and qa_reason_annot_file is not None and qa_action_reason_annot_file is not None:
       self._index_action_reason_pairs(
           qa_action_annot_file, 
           qa_reason_annot_file,
-          qa_action_reason_annot_file)
+          qa_action_reason_annot_file,
+          qa_action_reason_padding)
 
   def get_meta_list(self):
     """Returns all meta info.
@@ -305,18 +319,29 @@ class AdsDatasetApi(object):
     if self._images_dict is None:
       raise ValueError('images_dict is None.')
 
-    def _revise(name):
+    def _revise_topic_id(topic_id):
+      if not topic_id.isdigit():
+        return None
+      topic_id = int(topic_id)
+      if topic_id == 39: topic_id = 0
+      return topic_id
+
+    def _revise_topic_name(name):
       matches = re.findall(r"\"(.*?)\"", name)
       if len(matches) > 1:
-        return matches[1]
-      return matches[0]
+        return matches[1].lower()
+      return matches[0].lower()
 
     self._topic_to_name = {}
     self._name_to_topic = {}
     with open(topic_list_file, 'r') as fp:
       for line in fp.readlines():
         topic_id, topic_name = line.strip('\n').split('\t') 
-        topic_name = _revise(topic_name)
+
+        topic_id = _revise_topic_id(topic_id)
+        topic_name = _revise_topic_name(topic_name)
+        assert topic_id is not None
+
         self._topic_to_name[topic_id] = topic_name
         self._name_to_topic[topic_name] = topic_id
 
@@ -328,7 +353,8 @@ class AdsDatasetApi(object):
         if meta is None:
           raise ValueError('cannot find image with image_id %s' % (image_id))
         topic_id_list = [
-          tid for tid in topic_id_list if tid in self._topic_to_name]
+          _revise_topic_id(tid) for tid in topic_id_list if _revise_topic_id(tid) in self._topic_to_name]
+
         if len(topic_id_list) > 0:
           topic_id, num_votes = self._majority_vote(topic_id_list)
 
@@ -384,7 +410,7 @@ class AdsDatasetApi(object):
         # Sort by area and process nms.
         area_func = lambda x: (x[2] - x[0]) * (x[3] - x[1])
         boxes = sorted(boxes, lambda x, y: cmp(area_func(x), area_func(y)))
-        selected_boxes = nms.process(np.array(boxes), np.array(scores))
+        selected_boxes, _ = nms.process(np.array(boxes), np.array(scores))
 
         entities = []
         for box in selected_boxes:
@@ -425,22 +451,49 @@ class AdsDatasetApi(object):
         meta = self._images_dict.get(image_id, None)
         if meta is None:
           raise ValueError('cannot find image with image_id %s' % (image_id))
-        entities = []
-        for box, score in zip(annot['boxes'], annot['scores']):
-          xmin, ymin, xmax, ymax = box
-          entities.append({
-              'score': score,
-              'xmin': xmin,
-              'ymin': ymin,
-              'xmax': xmax,
-              'ymax': ymax
-              })
-        meta['entities_ex'] = entities
+        #entities = annot
+        #for box, score in zip(annot['boxes'], annot['scores']):
+        #  xmin, ymin, xmax, ymax = box
+        #  entities.append({
+        #      'score': score,
+        #      'xmin': xmin,
+        #      'ymin': ymin,
+        #      'xmax': xmax,
+        #      'ymax': ymax
+        #      })
+        meta['entities_ex'] = annot
         self._entity_annotations_ex.append(meta)
     return self._entity_annotations_ex
 
+  def _index_densecap(self, densecap_annot_file):
+    """Index densecap labels.
+
+    Args:
+      densecap_annot_file: path to the densecap annotation file.
+
+    Raises:
+      ValueError: if annotations file is invalid.
+    """
+    if densecap_annot_file is None:
+      raise ValueError('densecap_annot_file is None.')
+
+    if self._images_dict is None:
+      raise ValueError('images_dict is None.')
+
+    self._densecap_annotations = []
+    with open(densecap_annot_file, 'r') as fp:
+      annots = json.loads(fp.read())
+      for image_id, annot in annots.iteritems():
+        meta = self._images_dict.get(image_id, None)
+        if meta is None:
+          raise ValueError('cannot find image with image_id %s' % (image_id))
+        meta['densecap_entities'] = annot['object']
+        self._densecap_annotations.append(meta)
+    return self._densecap_annotations
+
   def _index_action_reason_pairs(self, qa_action_annot_file,
-      qa_reason_annot_file, qa_action_reason_annot_file):
+      qa_reason_annot_file, qa_action_reason_annot_file,
+      qa_action_reason_padding):
     """Index action reason pairs.
 
     Args:
@@ -456,6 +509,11 @@ class AdsDatasetApi(object):
 
     printable = set(string.printable)
     convert_to_printable = lambda caption: filter(lambda x: x in printable, caption)
+
+    def _pad_and_add(meta, captions):
+      captions = captions[:qa_action_reason_padding]
+      if qa_action_reason_padding is None or len(captions) == qa_action_reason_padding:
+        meta['action_reason_captions'] = captions
 
     def _process_combined_annots(qa_action_reason_annot_file):
       """Process combined annotations.
@@ -479,9 +537,11 @@ class AdsDatasetApi(object):
         meta = self._images_dict.get(image_id, None)
         if meta is None:
           raise ValueError('cannot find image with image_id %s' % (image_id))
-        meta['action_reason_captions'] = [convert_to_printable(caption) for caption in captions]
-        meta_list.append(meta)
-      logging.info('Load %d combined QA annotations.', len(meta_list))
+        captions = [convert_to_printable(caption) for caption in captions]
+        _pad_and_add(meta, captions)
+        if 'action_reason_captions' in meta:
+          meta_list.append(meta)
+      print >> sys.stderr, 'Load %d combined QA annotations.' % (len(meta_list))
       return meta_list
 
     def _revise_action_reason(action, reason):
@@ -532,16 +592,17 @@ class AdsDatasetApi(object):
           action, reason = action.strip(), reason.strip()
           if action and reason:
             captions.append(_revise_action_reason(action, reason))
-        meta['action_reason_captions'] = captions
-        meta_list.append(meta)
+        _pad_and_add(meta, captions)
+        if 'action_reason_captions' in meta:
+          meta_list.append(meta)
 
-      logging.info('Load %d seperated QA annotations.', len(meta_list))
+      print >> sys.stderr, 'Load %d seperated QA annotations.' % (len(meta_list))
       return meta_list
 
     meta_list = []
     meta_list.extend(_process_combined_annots(qa_action_reason_annot_file))
     meta_list.extend(_process_seperate_annots(qa_action_annot_file, qa_reason_annot_file))
-    logging.info('Load %d QA annotations.', len(meta_list))
+    print >> sys.stderr, 'Load %d QA annotations.' % (len(meta_list))
     self._action_reason_annotations = meta_list
     return meta_list
 

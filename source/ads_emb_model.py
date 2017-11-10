@@ -121,6 +121,10 @@ class AdsEmbModel(object):
     # Caption encoder.
     self.caption_encoder = text_encoder_builder.build(
         model_proto.caption_encoder)
+    self.caption_projector = None
+    if model_proto.HasField('caption_projector'):
+      self.caption_projector = feature_extractor_builder.build(
+          model_proto.caption_projector)
 
     # Topic encoder.
     self.topic_encoder = None
@@ -139,6 +143,10 @@ class AdsEmbModel(object):
     if model_proto.HasField('densecap_encoder'):
       self.densecap_encoder = text_encoder_builder.build(
           model_proto.densecap_encoder)
+    self.densecap_projector = None
+    if model_proto.HasField('densecap_projector'):
+      self.densecap_projector = text_encoder_builder.build(
+          model_proto.densecap_projector)
 
   @property
   def model_proto(self):
@@ -456,6 +464,10 @@ class AdsEmbModel(object):
     self.add_tensor('caption_strings', caption_strings)
     # self.add_tensor('caption_embs', caption_embs)
 
+    if self.caption_projector is not None:
+      caption_embs = self.caption_projector.extract_feature(
+          caption_embs, is_training=is_training)
+
     return caption_embs, self.caption_encoder.assign_from_checkpoint_fn(
         self.model_proto.caption_encoder_checkpoint)
 
@@ -478,6 +490,10 @@ class AdsEmbModel(object):
     self.add_tensor('densecap_caption_lengths', caption_lengths)
     self.add_tensor('densecap_caption_strings', caption_strings)
     self.add_tensor('densecap_caption_embs', caption_embs)
+
+    if self.densecap_projector is not None:
+      caption_embs = self.densecap_projector.extract_feature(
+          caption_embs, is_training=is_training)
 
     def _assign_fn(sess):
       tf.logging.info('Empty caption assign_fn is called.')
@@ -574,25 +590,23 @@ class AdsEmbModel(object):
     """
     model_proto = self.model_proto
 
-    # Image model.
+    # Build image model.
     assign_fn_img = None
     if model_proto.from_feature:
       image_embs = self.build_image_model_from_feature(
-          num_detections, proposed_features, 
-          is_training=is_training)
+          num_detections, proposed_features, is_training=is_training)
     else:
       image_embs, assign_fn_img = self.build_image_model(
           images, is_training=is_training) 
     self.add_tensor('image_embs', image_embs)
 
-    # Caption model.
+    # Build caption model.
     caption_indices = self._mine_related_examples(num_captions)
     caption_lengths = tf.gather_nd(caption_lengths, caption_indices)
     caption_strings = tf.gather_nd(caption_strings, caption_indices)
 
     caption_embs, assign_fn_txt = self.build_caption_model(
-        caption_lengths, caption_strings, 
-        is_training=is_training)
+        caption_lengths, caption_strings, is_training=is_training)
 
     if model_proto.normalize_image_embedding:
       image_embs = unit_norm(image_embs)
@@ -601,7 +615,7 @@ class AdsEmbModel(object):
     tf.summary.histogram('embedding/image', image_embs)
     tf.summary.histogram('embedding/caption', caption_embs)
 
-    # Process triplets mining.
+    # Function for mining triplets.
     triplet_mining_fn = None
     method = model_proto.triplet_mining_method
 
@@ -617,21 +631,55 @@ class AdsEmbModel(object):
     elif method == ads_emb_model_pb2.AdsEmbModel.SEMI_HARD:
       triplet_mining_fn = triplet_loss.mine_semi_hard_examples
 
+    elif method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC:
+      triplet_mining_fn = triplet_loss.mine_all_examples
+
+    elif method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC2:
+      def _mine_hard_examples(distances):
+        return triplet_loss.mine_hard_examples(distances,
+            model_proto.num_negative_examples)
+      triplet_mining_fn = _mine_hard_examples
+
     assert triplet_mining_fn is not None
 
     # Get the distance measuring function.
     def _distance_fn_with_dropout(x, y):
       joint_emb = tf.multiply(x, y)
       if is_training:
-        joint_emb = tf.nn.dropout(joint_emb,
-            model_proto.joint_emb_dropout_keep_prob)
+        joint_emb = tf.nn.dropout(
+            joint_emb, model_proto.joint_emb_dropout_keep_prob)
       return 1 - tf.reduce_sum(joint_emb, axis=1)
+
+    def _refine_hard_triplets(pos_indices, neg_indices):
+      """Refine topic triplets.
+
+      1. Positive and negative example should be from different topics.
+      2. Topic of positive example could not be 'unclear' (0).
+
+      Args:
+        pos_indices: a [triplet_batch] int32 tensor denoting index.
+        neg_indices: a [triplet_batch] int32 tensor denoting index.
+      """
+      pos_topics = tf.gather(topics, pos_indices)
+      neg_topics = tf.gather(topics, neg_indices)
+      masks = tf.logical_and(
+          tf.equal(pos_topics, neg_topics),
+          tf.not_equal(pos_topics, 0))
+      pos_indices = tf.boolean_mask(pos_indices, masks)
+      neg_indices = tf.boolean_mask(neg_indices, masks)
+      return pos_indices, neg_indices
+
+    refine_fn = None
+    if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC:
+      refine_fn = _refine_hard_triplets
+    if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC2:
+      refine_fn = _refine_hard_triplets
 
     # Use image as anchor: related statements should be more similar.
     loss = _triplet_loss_wrapper(
         image_embs, caption_embs, 
         mine_fn=triplet_mining_fn, 
-        refine_fn=None, 
+        refine_fn=refine_fn, 
         distance_fn=_distance_fn_with_dropout,
         margin=model_proto.triplet_alpha, 
         anchor_name='img', 
@@ -642,7 +690,7 @@ class AdsEmbModel(object):
     loss = _triplet_loss_wrapper(
         caption_embs, image_embs, 
         mine_fn=triplet_mining_fn, 
-        refine_fn=None, 
+        refine_fn=refine_fn, 
         distance_fn=_distance_fn_with_dropout,
         margin=model_proto.triplet_alpha, 
         anchor_name='cap', 
@@ -650,6 +698,11 @@ class AdsEmbModel(object):
     tf.losses.add_loss(loss)
 
     # Topic model.
+    if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC:
+      assert self.topic_encoder is not None
+    if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC2:
+      assert self.topic_encoder is not None
+
     if self.topic_encoder is not None:
 
       topic_embs, _ = self.build_topic_model(topics, is_training=is_training)
@@ -667,10 +720,12 @@ class AdsEmbModel(object):
         """
         pos_topics = tf.gather(topics, pos_indices)
         neg_topics = tf.gather(topics, neg_indices)
-        #masks = tf.logical_and(
-        #    tf.not_equal(pos_topics, neg_topics),
-        #    tf.not_equal(pos_topics, 0))
-        masks = tf.not_equal(pos_topics, 0)
+        if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC:
+          masks = tf.logical_and(
+              tf.not_equal(pos_topics, neg_topics),
+              tf.not_equal(pos_topics, 0))
+        else:
+          masks = tf.not_equal(pos_topics, 0)
         pos_indices = tf.boolean_mask(pos_indices, masks)
         neg_indices = tf.boolean_mask(neg_indices, masks)
         return pos_indices, neg_indices
@@ -763,15 +818,15 @@ class AdsEmbModel(object):
       densecap_caption_embs = unit_norm(densecap_caption_embs)
 
       # Use image as anchor: related densecap captions should be more similar.
-      loss = _triplet_loss_wrapper(
-          image_embs, densecap_caption_embs, 
-          mine_fn=triplet_mining_fn, 
-          refine_fn=None, 
-          distance_fn=_distance_fn_with_dropout,
-          margin=model_proto.triplet_alpha, 
-          anchor_name='img', 
-          positive_name='densecap')
-      tf.losses.add_loss(loss * model_proto.loss_weight_densecap)
+      #loss = _triplet_loss_wrapper(
+      #    image_embs, densecap_caption_embs, 
+      #    mine_fn=triplet_mining_fn, 
+      #    refine_fn=None, 
+      #    distance_fn=_distance_fn_with_dropout,
+      #    margin=model_proto.triplet_alpha, 
+      #    anchor_name='img', 
+      #    positive_name='densecap')
+      #tf.losses.add_loss(loss * model_proto.loss_weight_densecap)
 
       # Use densecap as anchor: related images should be more similar.
       loss = _triplet_loss_wrapper(
@@ -782,6 +837,17 @@ class AdsEmbModel(object):
           margin=model_proto.triplet_alpha, 
           anchor_name='densecap', 
           positive_name='img')
+      tf.losses.add_loss(loss * model_proto.loss_weight_densecap)
+
+      # Use densecap as anchor: related captions should be more similar.
+      loss = _triplet_loss_wrapper(
+          densecap_caption_embs, caption_embs,
+          mine_fn=triplet_mining_fn, 
+          refine_fn=None, 
+          distance_fn=_distance_fn_with_dropout,
+          margin=model_proto.triplet_alpha, 
+          anchor_name='densecap', 
+          positive_name='cap')
       tf.losses.add_loss(loss * model_proto.loss_weight_densecap)
 
     def _assign_fn(sess):

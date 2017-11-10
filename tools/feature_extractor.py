@@ -16,10 +16,8 @@ from utils.ads_api import AdsApi
 flags = tf.app.flags
 flags.DEFINE_string('feature_extractor', 'inception_v4_extractor', 'Name of the extractor.')
 flags.DEFINE_string('checkpoint_path', '', 'Path to the pre-trained ckpt file.')
-
 flags.DEFINE_string('ads_config', 'configs/ads_api_config', 'Directory to the ads config file.')
-
-flags.DEFINE_float('score_threshold', 0.5, 'Threshold for filtering out low confident scores.')
+flags.DEFINE_float('score_threshold', 0.0, 'Threshold for filtering out low confident scores.')
 flags.DEFINE_string('output_path', '', 'Path to the output file.')
 
 FLAGS = flags.FLAGS
@@ -51,6 +49,11 @@ def _visualize(batch_data):
 def main(_):
   tf.logging.set_verbosity(tf.logging.INFO)
 
+  api = AdsApi(FLAGS.ads_config)
+  meta_list = api.get_meta_list()
+
+  tf.logging.info('Loaded %s examples.', len(meta_list))
+
   # Create feature extractor.
   config = feature_extractors_pb2.FeatureExtractor()
   text_format.Merge(config_str, config)
@@ -58,7 +61,7 @@ def main(_):
   feature_extractor = builder.build(config)
   image_size = feature_extractor.default_image_size
 
-  tf.logging.info('Default image size of %s is %s:', 
+  tf.logging.info('Default image size of %s is: %s', 
       type(feature_extractor).__name__, image_size)
 
   # Create computational graph.
@@ -82,43 +85,35 @@ def main(_):
     if len(invalid_tensor_names) > 0:
       raise ValueError('There are uninitialized variables!')
 
-    api = AdsApi()
-    api.init(images_dir=FLAGS.images_dir,
-        entity_annot_file_ex=FLAGS.entity_annot_file)
-    meta_list = api.get_meta_list_with_entity_annots_ex(
-        score_threshold=FLAGS.score_threshold)
-    tf.logging.info('Loaded %s examples.', len(meta_list))
-
     for meta_index, meta in enumerate(meta_list):
-      image = vis.image_load(meta['filename'], convert_to_rgb=True)
+      image = vis.image_load(meta['file_path'], convert_to_rgb=True)
       image = vis.image_uint8_to_float32(image)
-
-      if meta_index % 10 == 0:
-        tf.logging.info('On image %d of %d', meta_index, len(meta_list))
 
       # Batch operation, the first image is the full image.
       roi_list = [cv2.resize(image, (image_size, image_size))]
       score_list = []
-      for entity in meta['entities_ex']:
+      for obj in meta['objects']:
         roi = vis.image_crop_and_resize(image, 
-            box=(entity['xmin'], entity['ymin'], entity['xmax'], entity['ymax']), 
+            box=(obj['xmin'], obj['ymin'], obj['xmax'], obj['ymax']), 
             crop_size=(image_size, image_size))
         roi_list.append(roi)
-        score_list.append(entity['score'])
-#      assert len(roi_list) == 11
-#      assert len(score_list) == 10
+        score_list.append(obj['score'])
 
       roi_batch = np.stack(roi_list, axis=0)
-      if meta_index == 0:
-        _visualize(roi_batch)
 
       # Get feature from inception model.
-      embeddings = sess.run(pre_logits_flatten, feed_dict={inputs: roi_batch})
+      embeddings = sess.run(features, feed_dict={inputs: roi_batch})
       output[meta['image_id']] = {
         'image_emb': embeddings[0],
-        'entity_score_list': np.array(score_list),
-        'entity_emb_list': embeddings[1:]
+        'object_score_list': np.array(score_list),
+        'object_emb_list': embeddings[1:]
       }
+
+      assert len(score_list) == len(embeddings[1:]) == 10
+
+      if meta_index % 10 == 0:
+        tf.logging.info('On image %d of %d', meta_index, len(meta_list))
+      tf.logging.info('export %d entities.', len(score_list))
 
   with open(FLAGS.output_path, 'wb') as fp:
     np.save(fp, output)

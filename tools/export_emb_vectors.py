@@ -8,8 +8,6 @@ import re
 import sys
 import cv2
 import time
-import nltk
-from nltk.stem import PorterStemmer
 
 from google.protobuf import text_format
 from protos import ads_emb_model_pb2
@@ -17,25 +15,28 @@ from protos import ads_emb_model_pb2
 import numpy as np
 import tensorflow as tf
 
-import ads_emb_model
+from source import ads_emb_model
 
 from utils import vis
 from utils import ads_api
 
-from train import FLAGS
-from train import default_session_config_proto
+from source.train import FLAGS
+from source.train import default_session_config_proto
 
 flags = tf.app.flags
 
 flags.DEFINE_string('api_config', 'configs/ads_api_topics.config', 'Path to config file.')
 flags.DEFINE_integer('max_image_size', 800, 'Maximum value of image size.')
-flags.DEFINE_string('output_path', '', 'Path to the output file.')
+flags.DEFINE_string('image_emb_path', 'output/image_emb.npz', 'Path to the output image embedding file.')
+flags.DEFINE_string('word_emb_path', 'output/word_emb.npz', 'Path to the word embedding file.')
+flags.DEFINE_string('densecap_emb_path', 'output/densecap_emb.npz', 'Path to the word embedding file.')
+flags.DEFINE_string('symbol_emb_path', 'output/symbol_emb.npz', 'Path to the symbol embedding file.')
 
 slim = tf.contrib.slim
 
 def _get_meta_list():
   api = ads_api.AdsApi(FLAGS.api_config)
-  return api.get_meta_list()
+  return api.get_meta_list(split='valid')
 
 def _export_emb_vecs(image_placeholder, image_emb, sess, meta_list):
   """Exports embedding vectors.
@@ -89,6 +90,27 @@ def main(_):
     image_embs = tf.nn.l2_normalize(image_embs, 1)
     image_emb = image_embs[0, :]
 
+    # Get word embedding weights.
+    model.caption_encoder.build_weights(
+        vocab_size=model_proto.caption_encoder.bow_encoder.vocab_size,
+        embedding_size=model_proto.caption_encoder.bow_encoder.embedding_size)
+    word_embedding_weights = tf.nn.l2_normalize(
+        model.caption_encoder.embedding_weights, 1)
+
+    # Get densecap embedding weights.
+    model.densecap_encoder.build_weights(
+        vocab_size=model_proto.densecap_encoder.bow_encoder.vocab_size,
+        embedding_size=model_proto.densecap_encoder.bow_encoder.embedding_size)
+    densecap_embedding_weights = tf.nn.l2_normalize(
+        model.densecap_encoder.embedding_weights, 1)
+
+    # Get symbol embedding weights.
+    model.symbol_encoder.build_weights(
+        vocab_size=model_proto.symbol_encoder.bow_encoder.vocab_size,
+        embedding_size=model_proto.symbol_encoder.bow_encoder.embedding_size)
+    symbol_embedding_weights = tf.nn.l2_normalize(
+        model.symbol_encoder.embedding_weights, 1)
+
     global_step = slim.get_or_create_global_step()
 
     # Variables to restore, ignore variables in the pre-trained model.
@@ -115,11 +137,29 @@ def main(_):
     step = sess.run(global_step)
     tf.logging.info('Using model at %s steps.', step)
 
-    result = _export_emb_vecs(
-        image_placeholder, image_emb, sess, meta_list)
+    #Export word embeddings.
+    word_embeddings = sess.run(word_embedding_weights)
+    densecap_embeddings = sess.run(densecap_embedding_weights)
+    symbol_embeddings = sess.run(symbol_embedding_weights)
 
-  with open(FLAGS.output_path, 'wb') as fp:
-    np.save(fp, result)
+    ## Export image embeddings.
+    #result = _export_emb_vecs(
+    #    image_placeholder, image_emb, sess, meta_list)
+
+  #with open(FLAGS.image_emb_path, 'wb') as fp:
+  #  np.save(fp, result)
+
+  with open(FLAGS.word_emb_path, 'wb') as fp:
+    tf.logging.info('Shape of word embedding: %s', word_embeddings.shape)
+    np.save(fp, word_embeddings)
+
+  with open(FLAGS.densecap_emb_path, 'wb') as fp:
+    tf.logging.info('Shape of densecap embedding: %s', densecap_embeddings.shape)
+    np.save(fp, densecap_embeddings)
+
+  with open(FLAGS.symbol_emb_path, 'wb') as fp:
+    tf.logging.info('Shape of symbol embedding: %s', symbol_embeddings.shape)
+    np.save(fp, symbol_embeddings)
 
 if __name__ == '__main__':
   tf.app.run()
