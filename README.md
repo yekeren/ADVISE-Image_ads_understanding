@@ -19,8 +19,6 @@ the patch representations. At the meantime, text embedder encodes statements
 into the same feature space as the image representation. Triplet loss is used to
 train the whole network.
 
-### Region proposal network
-
 ### Image feature extractor
 
 ### Text embedder
