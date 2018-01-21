@@ -55,7 +55,6 @@ class FCExtractor(FeatureExtractor):
     if is_training:
       node = tf.nn.dropout(node, model_proto.input_dropout_keep_prob)
 
-    tf.logging.info('*' * 128)
     with tf.variable_scope(self.scope):
       # Build hidden layers.
       if model_proto.hidden_layers > 0:
@@ -67,7 +66,6 @@ class FCExtractor(FeatureExtractor):
                 num_outputs=model_proto.hidden_units, scope='hidden_%d' % (i))
             if is_training:
               node = tf.nn.dropout(node, model_proto.hidden_dropout_keep_prob)
-            tf.logging.info('%s: %s', node.op.name, node.get_shape().as_list())
 
       # Build output layer.
       with slim.arg_scope(output_hyperparams):
@@ -76,5 +74,4 @@ class FCExtractor(FeatureExtractor):
         if is_training:
           node = tf.nn.dropout(node, model_proto.output_dropout_keep_prob)
 
-    tf.logging.info('%s: %s', node.op.name, node.get_shape().as_list())
     return node

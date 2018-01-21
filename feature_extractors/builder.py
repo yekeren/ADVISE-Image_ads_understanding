@@ -7,6 +7,7 @@ from protos import feature_extractors_pb2
 
 from feature_extractors.mobilenet_v1_extractor import MobilenetV1Extractor
 from feature_extractors.inception_v4_extractor import InceptionV4Extractor
+from feature_extractors.vgg_16_extractor import VGG16Extractor
 from feature_extractors.fc_extractor import FCExtractor
 
 def build(config):
@@ -31,6 +32,9 @@ def build(config):
 
   if 'inception_v4_extractor' == which_oneof:
     return InceptionV4Extractor(config.inception_v4_extractor)
+
+  if 'vgg_16_extractor' == which_oneof:
+    return VGG16Extractor(config.vgg_16_extractor)
 
   if 'fc_extractor' == which_oneof:
     return FCExtractor(config.fc_extractor)
