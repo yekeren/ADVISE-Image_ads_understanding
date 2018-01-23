@@ -8,12 +8,12 @@ import tensorflow as tf
 
 from google.protobuf import text_format
 from object_detection.builders import hyperparams_builder
+from object_detection.protos import hyperparams_pb2
 
 from utils import triplet_loss
 from protos import ads_emb_model_pb2
 from object_detection.builders import model_builder
 from region_proposal_networks import builder as rpn_builder
-from spatial_transformer_networks import builder as spatial_transformer_builder
 from feature_extractors import builder as feature_extractor_builder
 from text_encoders import builder as text_encoder_builder
 
@@ -40,10 +40,10 @@ def unit_norm(x):
   return tf.nn.l2_normalize(x, 1)
 
 
-def distance_fn(x, y):
+def _distance_fn(x, y):
   return 1 - tf.reduce_sum(tf.multiply(x, y), axis=1)
-  #return tf.reduce_sum(tf.square(x - y), axis=1)
 
+distance_fn = _distance_fn
 
 def _triplet_loss_wrapper(anchors, positives, mine_fn, refine_fn,
     distance_fn, margin, anchor_name, positive_name):
@@ -92,17 +92,18 @@ class AdsEmbModel(object):
     self._model_proto = model_proto
     self._tensors = {}
 
+    def _dn(x, y):
+      return tf.reduce_sum(tf.square(x - y), axis=1)
+
+    if model_proto.use_two_way_nets_loss:
+      global distance_fn
+      distance_fn = _dn
+
     # Region proposal network.
     self.detection_model = None
     if model_proto.HasField('region_proposal_network'):
       self.detection_model = rpn_builder.build(
           model_proto.region_proposal_network)
-
-    # Spatial transformer network.
-    self.spatial_transformer = None
-    if model_proto.HasField('spatial_transformer'):
-      self.spatial_transformer = spatial_transformer_builder.build(
-          model_proto.spatial_transformer)
 
     # Feature extractor.
     self.feature_extractor = feature_extractor_builder.build(
@@ -311,6 +312,8 @@ class AdsEmbModel(object):
     proposed_features = tf.boolean_mask(proposed_features, boolean_masks)
 
     # Extract image embedding vectors using FC layers.
+    raw_embs = tf.identity(proposed_features, 'image_raw_embs')
+
     proposed_embs = self.image_encoder.extract_feature(
         proposed_features, is_training=is_training)
 
@@ -459,6 +462,7 @@ class AdsEmbModel(object):
     """
     caption_embs = self.caption_encoder.encode(
         caption_lengths, caption_strings, is_training)
+    raw_embs = tf.identity(caption_embs, 'caption_raw_embs')
 
     self.add_tensor('caption_lengths', caption_lengths)
     self.add_tensor('caption_strings', caption_strings)
@@ -615,100 +619,149 @@ class AdsEmbModel(object):
     tf.summary.histogram('embedding/image', image_embs)
     tf.summary.histogram('embedding/caption', caption_embs)
 
-    # Function for mining triplets.
-    triplet_mining_fn = None
-    method = model_proto.triplet_mining_method
+    if model_proto.use_decov_loss:
+      def regularize_decov(cov_x):
+        return tf.reduce_sum(tf.square(cov_x)) - tf.reduce_sum(tf.square(tf.diag_part(cov_x)))
 
-    if method == ads_emb_model_pb2.AdsEmbModel.ALL:
-      triplet_mining_fn = triplet_loss.mine_all_examples
+      cov_x = tf.matmul(tf.transpose(image_embs), image_embs) / image_embs.get_shape()[0].value
+      cov_y = tf.matmul(tf.transpose(caption_embs), caption_embs) / caption_embs.get_shape()[0].value
 
-    elif method == ads_emb_model_pb2.AdsEmbModel.HARD:
-      def _mine_hard_examples(distances):
-        return triplet_loss.mine_hard_examples(distances,
-            model_proto.num_negative_examples)
-      triplet_mining_fn = _mine_hard_examples
+      ratio = model_proto.loss_weight_decov
+      loss_withen_x = ratio * regularize_decov(cov_x)
+      loss_withen_y = ratio * regularize_decov(cov_y)
 
-    elif method == ads_emb_model_pb2.AdsEmbModel.SEMI_HARD:
-      triplet_mining_fn = triplet_loss.mine_semi_hard_examples
+      tf.losses.add_loss(loss_withen_x)
+      tf.losses.add_loss(loss_withen_y)
+      tf.summary.scalar('losses/loss_withen_x', loss_withen_x)
+      tf.summary.scalar('losses/loss_withen_y', loss_withen_y)
 
-    elif method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC:
-      triplet_mining_fn = triplet_loss.mine_all_examples
+    # Two way nets loss.
+    if model_proto.use_two_way_nets_loss:
 
-    elif method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC2:
-      def _mine_hard_examples(distances):
-        return triplet_loss.mine_hard_examples(distances,
-            model_proto.num_negative_examples)
-      triplet_mining_fn = _mine_hard_examples
+      tf.logging.info('Use two way nets model.')
+      # loss_h, i.e., L_h mentioned in two way nets paper.
+      loss_h = tf.reduce_sum(tf.square(image_embs - caption_embs), axis=1)
+      loss_h = tf.reduce_mean(loss_h)
+      tf.losses.add_loss(loss_h)
+      tf.summary.scalar('losses/regression_h', loss_h)
 
-    assert triplet_mining_fn is not None
+      # loss_x
+      x = tf.get_default_graph().get_tensor_by_name('image_raw_embs:0')
+      y = tf.get_default_graph().get_tensor_by_name('caption_raw_embs:0')
+      #x = unit_norm(x)
+      #y = unit_norm(y)
 
-    # Get the distance measuring function.
-    def _distance_fn_with_dropout(x, y):
-      joint_emb = tf.multiply(x, y)
-      if is_training:
-        joint_emb = tf.nn.dropout(
-            joint_emb, model_proto.joint_emb_dropout_keep_prob)
-      return 1 - tf.reduce_sum(joint_emb, axis=1)
-
-    def _refine_hard_triplets(pos_indices, neg_indices):
-      """Refine topic triplets.
-
-      1. Positive and negative example should be from different topics.
-      2. Topic of positive example could not be 'unclear' (0).
-
-      Args:
-        pos_indices: a [triplet_batch] int32 tensor denoting index.
-        neg_indices: a [triplet_batch] int32 tensor denoting index.
+      # loss_y
+      hyper_str = """
+        op: FC
+        activation: NONE
+        regularizer {
+          l2_regularizer {
+            weight: 1e-6
+          }
+        }
+        initializer {
+          truncated_normal_initializer {
+            stddev: 0.03
+            mean: 0.0
+          }
+        }
+        batch_norm {
+          train: true
+          scale: true
+          center: true
+          decay: 0.999
+          epsilon: 0.001
+        }
       """
-      pos_topics = tf.gather(topics, pos_indices)
-      neg_topics = tf.gather(topics, neg_indices)
-      masks = tf.logical_and(
-          tf.equal(pos_topics, neg_topics),
-          tf.not_equal(pos_topics, 0))
-      pos_indices = tf.boolean_mask(pos_indices, masks)
-      neg_indices = tf.boolean_mask(neg_indices, masks)
-      return pos_indices, neg_indices
+      params = hyperparams_pb2.Hyperparams()
+      text_format.Merge(hyper_str, params)
 
-    refine_fn = None
-    if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC:
-      refine_fn = _refine_hard_triplets
-    if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC2:
-      refine_fn = _refine_hard_triplets
+      hyperparams = hyperparams_builder.build(params, is_training=is_training)
 
-    # Use image as anchor: related statements should be more similar.
-    loss = _triplet_loss_wrapper(
-        image_embs, caption_embs, 
-        mine_fn=triplet_mining_fn, 
-        refine_fn=refine_fn, 
-        distance_fn=_distance_fn_with_dropout,
-        margin=model_proto.triplet_alpha, 
-        anchor_name='img', 
-        positive_name='cap')
-    tf.losses.add_loss(loss)
+      with slim.arg_scope(hyperparams):
+        image_to_y = slim.fully_connected(
+            image_embs, 
+            num_outputs=y.get_shape()[-1].value,
+            scope='image_to_y')
 
-    # Use caption as anchor: related images should be more similar.
-    loss = _triplet_loss_wrapper(
-        caption_embs, image_embs, 
-        mine_fn=triplet_mining_fn, 
-        refine_fn=refine_fn, 
-        distance_fn=_distance_fn_with_dropout,
-        margin=model_proto.triplet_alpha, 
-        anchor_name='cap', 
-        positive_name='img')
-    tf.losses.add_loss(loss)
+      params.activation = hyperparams_pb2.Hyperparams.RELU_LEAKY
+      hyperparams = hyperparams_builder.build(params, is_training=is_training)
+      with slim.arg_scope(hyperparams):
+        caption_to_x = slim.fully_connected(
+            caption_embs, 
+            num_outputs=x.get_shape()[-1].value,
+            scope='caption_to_x')
 
-    # Topic model.
-    if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC:
-      assert self.topic_encoder is not None
-    if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC2:
-      assert self.topic_encoder is not None
+      if is_training:
+        image_to_y = tf.nn.dropout(image_to_y, 0.5)
+        caption_to_x = tf.nn.dropout(caption_to_x, 0.5)
 
-    if self.topic_encoder is not None:
+      #caption_to_x = unit_norm(caption_to_x)
+      #image_to_y = unit_norm(image_to_y)
+      r_gamma = []
+      gamma_list = [var for var in tf.global_variables() if 'gamma' in var.op.name]
+      for gamma in gamma_list:
+        r_gamma.append(
+            tf.reduce_sum(tf.square((1.0 / tf.maximum(gamma, 1e-12)))))
+      r_gamma = tf.add_n(r_gamma) * 1e-6
+      tf.losses.add_loss(r_gamma)
+      tf.summary.scalar('losses/r_gamma', r_gamma)
 
-      topic_embs, _ = self.build_topic_model(topics, is_training=is_training)
-      topic_embs = unit_norm(topic_embs)
+      tf.summary.histogram('activation/x', x)
+      tf.summary.histogram('activation/y', y)
+      tf.summary.histogram('activation/x_h', image_embs)
+      tf.summary.histogram('activation/y_h', caption_embs)
+      tf.summary.histogram('activation/x_reconstruct', caption_to_x)
+      tf.summary.histogram('activation/y_reconstruct', image_to_y)
 
-      def _refine_topic_triplets(pos_indices, neg_indices):
+      loss_x = tf.reduce_mean(tf.square(x - caption_to_x), axis=1)
+      loss_x = tf.reduce_mean(loss_x)
+      tf.losses.add_loss(loss_x)
+      tf.summary.scalar('losses/regression_x', loss_x)
+
+      loss_y = tf.reduce_mean(tf.square(y - image_to_y), axis=1)
+      loss_y = tf.reduce_mean(loss_y)
+      tf.losses.add_loss(loss_y)
+      tf.summary.scalar('losses/regression_y', loss_y)
+
+    else:
+      # Function for mining triplets.
+      triplet_mining_fn = None
+      method = model_proto.triplet_mining_method
+
+      if method == ads_emb_model_pb2.AdsEmbModel.ALL:
+        triplet_mining_fn = triplet_loss.mine_all_examples
+
+      elif method == ads_emb_model_pb2.AdsEmbModel.HARD:
+        def _mine_hard_examples(distances):
+          return triplet_loss.mine_hard_examples(distances,
+              model_proto.num_negative_examples)
+        triplet_mining_fn = _mine_hard_examples
+
+      elif method == ads_emb_model_pb2.AdsEmbModel.SEMI_HARD:
+        triplet_mining_fn = triplet_loss.mine_semi_hard_examples
+
+      elif method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC:
+        triplet_mining_fn = triplet_loss.mine_all_examples
+
+      elif method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC2:
+        def _mine_hard_examples(distances):
+          return triplet_loss.mine_hard_examples(distances,
+              model_proto.num_negative_examples)
+        triplet_mining_fn = _mine_hard_examples
+
+      assert triplet_mining_fn is not None
+
+      # Get the distance measuring function.
+      def _distance_fn_with_dropout(x, y):
+        joint_emb = tf.multiply(x, y)
+        if is_training:
+          joint_emb = tf.nn.dropout(
+              joint_emb, model_proto.joint_emb_dropout_keep_prob)
+        return 1 - tf.reduce_sum(joint_emb, axis=1)
+
+      def _refine_hard_triplets(pos_indices, neg_indices):
         """Refine topic triplets.
 
         1. Positive and negative example should be from different topics.
@@ -720,135 +773,182 @@ class AdsEmbModel(object):
         """
         pos_topics = tf.gather(topics, pos_indices)
         neg_topics = tf.gather(topics, neg_indices)
-        if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC:
-          masks = tf.logical_and(
-              tf.not_equal(pos_topics, neg_topics),
-              tf.not_equal(pos_topics, 0))
-        else:
-          masks = tf.not_equal(pos_topics, 0)
+        masks = tf.logical_and(
+            tf.equal(pos_topics, neg_topics),
+            tf.not_equal(pos_topics, 0))
         pos_indices = tf.boolean_mask(pos_indices, masks)
         neg_indices = tf.boolean_mask(neg_indices, masks)
         return pos_indices, neg_indices
 
-      # Use topic as anchor: images from the same topic should be more similar.
-      loss = _triplet_loss_wrapper(
-          topic_embs, image_embs, 
-          mine_fn=triplet_mining_fn, 
-          refine_fn=_refine_topic_triplets, 
-          distance_fn=_distance_fn_with_dropout,
-          margin=model_proto.triplet_alpha, 
-          anchor_name='topic', 
-          positive_name='img')
-      tf.losses.add_loss(loss * model_proto.loss_weight_topic)
+      refine_fn = None
+      if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC:
+        refine_fn = _refine_hard_triplets
+      if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC2:
+        refine_fn = _refine_hard_triplets
 
-      # Use topic as anchor: captions from the same topic should be more similar.
+      # Use image as anchor: related statements should be more similar.
       loss = _triplet_loss_wrapper(
-          topic_embs, caption_embs, 
+          image_embs, caption_embs, 
           mine_fn=triplet_mining_fn, 
-          refine_fn=_refine_topic_triplets, 
+          refine_fn=refine_fn, 
           distance_fn=_distance_fn_with_dropout,
           margin=model_proto.triplet_alpha, 
-          anchor_name='topic', 
+          anchor_name='img', 
           positive_name='cap')
-      tf.losses.add_loss(loss * model_proto.loss_weight_topic)
+      tf.losses.add_loss(loss)
 
-    # Symbol model.
-    if self.symbol_encoder is not None:
-      num_symbols = tf.maximum(num_symbols, 1)
-      #self.add_tensor('num_symbols', num_symbols)
-
-      symbol_indices = self._mine_related_examples(num_symbols)
-      symbols = tf.gather_nd(symbols, symbol_indices)
-
-      symbol_embs, _ = self.build_symbol_model(symbols, is_training=is_training)
-      symbol_embs = unit_norm(symbol_embs)
-
-      def _refine_symbol_triplets(pos_indices, neg_indices):
-        """Refine symbol triplets.
-
-        1. Positive and negative example should be from different symbols.
-        2. Topic of positive example could not be 'unclear' (0).
-
-        Args:
-          pos_indices: a [triplet_batch] int32 tensor denoting index.
-          neg_indices: a [triplet_batch] int32 tensor denoting index.
-        """
-        pos_symbols = tf.gather(symbols, pos_indices)
-        neg_symbols = tf.gather(symbols, neg_indices)
-        #masks = tf.logical_and(
-        #    tf.not_equal(pos_symbols, neg_symbols),
-        #    tf.not_equal(pos_symbols, 0))
-        masks = tf.not_equal(pos_symbols, 0)
-        pos_indices = tf.boolean_mask(pos_indices, masks)
-        neg_indices = tf.boolean_mask(neg_indices, masks)
-        return pos_indices, neg_indices
-
-      # Use symbol as anchor: images from the same symbol should be more similar.
+      # Use caption as anchor: related images should be more similar.
       loss = _triplet_loss_wrapper(
-          symbol_embs, image_embs, 
+          caption_embs, image_embs, 
           mine_fn=triplet_mining_fn, 
-          refine_fn=_refine_symbol_triplets, 
+          refine_fn=refine_fn, 
           distance_fn=_distance_fn_with_dropout,
           margin=model_proto.triplet_alpha, 
-          anchor_name='sym', 
+          anchor_name='cap', 
           positive_name='img')
-      tf.losses.add_loss(loss * model_proto.loss_weight_symbol)
+      tf.losses.add_loss(loss)
 
-      # Use symbol as anchor: captions from the same symbol should be more similar.
-      loss = _triplet_loss_wrapper(
-          symbol_embs, caption_embs, 
-          mine_fn=triplet_mining_fn, 
-          refine_fn=_refine_symbol_triplets, 
-          distance_fn=_distance_fn_with_dropout,
-          margin=model_proto.triplet_alpha, 
-          anchor_name='sym', 
-          positive_name='cap')
-      tf.losses.add_loss(loss * model_proto.loss_weight_symbol)
+      # Topic model.
+      if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC:
+        assert self.topic_encoder is not None
+      if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC2:
+        assert self.topic_encoder is not None
 
-    # Densecap model.
-    if self.densecap_encoder is not None:
-      densecap_caption_indices = self._mine_related_examples(densecap_num_captions)
-      densecap_caption_lengths = tf.gather_nd(
-          densecap_caption_lengths, densecap_caption_indices)
-      densecap_caption_strings = tf.gather_nd(
-          densecap_caption_strings, densecap_caption_indices)
+      if self.topic_encoder is not None:
 
-      densecap_caption_embs, _ = self.build_densecap_caption_model(
-          densecap_caption_lengths, densecap_caption_strings, is_training=is_training)
-      densecap_caption_embs = unit_norm(densecap_caption_embs)
+        topic_embs, _ = self.build_topic_model(topics, is_training=is_training)
+        topic_embs = unit_norm(topic_embs)
 
-      # Use image as anchor: related densecap captions should be more similar.
-      #loss = _triplet_loss_wrapper(
-      #    image_embs, densecap_caption_embs, 
-      #    mine_fn=triplet_mining_fn, 
-      #    refine_fn=None, 
-      #    distance_fn=_distance_fn_with_dropout,
-      #    margin=model_proto.triplet_alpha, 
-      #    anchor_name='img', 
-      #    positive_name='densecap')
-      #tf.losses.add_loss(loss * model_proto.loss_weight_densecap)
+        def _refine_topic_triplets(pos_indices, neg_indices):
+          """Refine topic triplets.
 
-      # Use densecap as anchor: related images should be more similar.
-      loss = _triplet_loss_wrapper(
-          densecap_caption_embs, image_embs,
-          mine_fn=triplet_mining_fn, 
-          refine_fn=None, 
-          distance_fn=_distance_fn_with_dropout,
-          margin=model_proto.triplet_alpha, 
-          anchor_name='densecap', 
-          positive_name='img')
-      tf.losses.add_loss(loss * model_proto.loss_weight_densecap)
+          1. Positive and negative example should be from different topics.
+          2. Topic of positive example could not be 'unclear' (0).
 
-      # Use densecap as anchor: related captions should be more similar.
-      loss = _triplet_loss_wrapper(
-          densecap_caption_embs, caption_embs,
-          mine_fn=triplet_mining_fn, 
-          refine_fn=None, 
-          distance_fn=_distance_fn_with_dropout,
-          margin=model_proto.triplet_alpha, 
-          anchor_name='densecap', 
-          positive_name='cap')
-      tf.losses.add_loss(loss * model_proto.loss_weight_densecap)
+          Args:
+            pos_indices: a [triplet_batch] int32 tensor denoting index.
+            neg_indices: a [triplet_batch] int32 tensor denoting index.
+          """
+          pos_topics = tf.gather(topics, pos_indices)
+          neg_topics = tf.gather(topics, neg_indices)
+          if method == ads_emb_model_pb2.AdsEmbModel.HARD_TOPIC:
+            masks = tf.logical_and(
+                tf.not_equal(pos_topics, neg_topics),
+                tf.not_equal(pos_topics, 0))
+          else:
+            masks = tf.not_equal(pos_topics, 0)
+          pos_indices = tf.boolean_mask(pos_indices, masks)
+          neg_indices = tf.boolean_mask(neg_indices, masks)
+          return pos_indices, neg_indices
+
+        # Use topic as anchor: images from the same topic should be more similar.
+        loss = _triplet_loss_wrapper(
+            topic_embs, image_embs, 
+            mine_fn=triplet_mining_fn, 
+            refine_fn=_refine_topic_triplets, 
+            distance_fn=_distance_fn_with_dropout,
+            margin=model_proto.triplet_alpha, 
+            anchor_name='topic', 
+            positive_name='img')
+        tf.losses.add_loss(loss * model_proto.loss_weight_topic)
+
+        # Use topic as anchor: captions from the same topic should be more similar.
+        loss = _triplet_loss_wrapper(
+            topic_embs, caption_embs, 
+            mine_fn=triplet_mining_fn, 
+            refine_fn=_refine_topic_triplets, 
+            distance_fn=_distance_fn_with_dropout,
+            margin=model_proto.triplet_alpha, 
+            anchor_name='topic', 
+            positive_name='cap')
+        tf.losses.add_loss(loss * model_proto.loss_weight_topic)
+
+      # Symbol model.
+      if self.symbol_encoder is not None:
+        num_symbols = tf.maximum(num_symbols, 1)
+        #self.add_tensor('num_symbols', num_symbols)
+
+        symbol_indices = self._mine_related_examples(num_symbols)
+        symbols = tf.gather_nd(symbols, symbol_indices)
+
+        symbol_embs, _ = self.build_symbol_model(symbols, is_training=is_training)
+        symbol_embs = unit_norm(symbol_embs)
+
+        def _refine_symbol_triplets(pos_indices, neg_indices):
+          """Refine symbol triplets.
+
+          1. Positive and negative example should be from different symbols.
+          2. Topic of positive example could not be 'unclear' (0).
+
+          Args:
+            pos_indices: a [triplet_batch] int32 tensor denoting index.
+            neg_indices: a [triplet_batch] int32 tensor denoting index.
+          """
+          pos_symbols = tf.gather(symbols, pos_indices)
+          neg_symbols = tf.gather(symbols, neg_indices)
+          #masks = tf.logical_and(
+          #    tf.not_equal(pos_symbols, neg_symbols),
+          #    tf.not_equal(pos_symbols, 0))
+          masks = tf.not_equal(pos_symbols, 0)
+          pos_indices = tf.boolean_mask(pos_indices, masks)
+          neg_indices = tf.boolean_mask(neg_indices, masks)
+          return pos_indices, neg_indices
+
+        # Use symbol as anchor: images from the same symbol should be more similar.
+        loss = _triplet_loss_wrapper(
+            symbol_embs, image_embs, 
+            mine_fn=triplet_mining_fn, 
+            refine_fn=_refine_symbol_triplets, 
+            distance_fn=_distance_fn_with_dropout,
+            margin=model_proto.triplet_alpha, 
+            anchor_name='sym', 
+            positive_name='img')
+        tf.losses.add_loss(loss * model_proto.loss_weight_symbol)
+
+        # Use symbol as anchor: captions from the same symbol should be more similar.
+        loss = _triplet_loss_wrapper(
+            symbol_embs, caption_embs, 
+            mine_fn=triplet_mining_fn, 
+            refine_fn=_refine_symbol_triplets, 
+            distance_fn=_distance_fn_with_dropout,
+            margin=model_proto.triplet_alpha, 
+            anchor_name='sym', 
+            positive_name='cap')
+        tf.losses.add_loss(loss * model_proto.loss_weight_symbol)
+
+      # Densecap model.
+      if self.densecap_encoder is not None:
+        densecap_caption_indices = self._mine_related_examples(densecap_num_captions)
+        densecap_caption_lengths = tf.gather_nd(
+            densecap_caption_lengths, densecap_caption_indices)
+        densecap_caption_strings = tf.gather_nd(
+            densecap_caption_strings, densecap_caption_indices)
+
+        densecap_caption_embs, _ = self.build_densecap_caption_model(
+            densecap_caption_lengths, densecap_caption_strings, is_training=is_training)
+        densecap_caption_embs = unit_norm(densecap_caption_embs)
+
+        # Use densecap as anchor: related images should be more similar.
+        loss = _triplet_loss_wrapper(
+            densecap_caption_embs, image_embs,
+            mine_fn=triplet_mining_fn, 
+            refine_fn=None, 
+            distance_fn=_distance_fn_with_dropout,
+            margin=model_proto.triplet_alpha, 
+            anchor_name='densecap', 
+            positive_name='img')
+        tf.losses.add_loss(loss * model_proto.loss_weight_densecap)
+
+        # Use densecap as anchor: related captions should be more similar.
+        loss = _triplet_loss_wrapper(
+            densecap_caption_embs, caption_embs,
+            mine_fn=triplet_mining_fn, 
+            refine_fn=None, 
+            distance_fn=_distance_fn_with_dropout,
+            margin=model_proto.triplet_alpha, 
+            anchor_name='densecap', 
+            positive_name='cap')
+        tf.losses.add_loss(loss * model_proto.loss_weight_densecap)
 
     def _assign_fn(sess):
       if assign_fn_img is not None:
