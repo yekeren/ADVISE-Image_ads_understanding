@@ -69,11 +69,33 @@ class AdsApi(object):
     if 'num_negative_statements' in config:
       self._sample_negative_statements(
           config['num_negative_statements'])
+      self._sample_hard_negative_statements(
+          config['num_negative_statements'])
+
+    if 'slogan_annotations' in config:
+      self._process_slogan(
+          config['slogan_annotations'],
+          config.get('num_positive_slogans', None))
+
+    if 'num_negative_slogans' in config:
+      self._sample_negative_slogans(
+          config['num_negative_slogans'])
 
     if 'densecap_annotations' in config:
       self._process_densecap(config['densecap_annotations'])
 
     self._summerize()
+
+  def get_meta_by_id(self, image_id):
+    """Returns meta info based on image_id.
+
+    Args:
+      image_id: string image_id.
+
+    Returns:
+      meta: meta info.
+    """
+    return self._meta[image_id]
 
   def get_meta_list(self, split=None):
     """Get meta list.
@@ -115,14 +137,23 @@ class AdsApi(object):
     num_topic_annots = len([x for x in meta_list if 'topic_id' in x])
     print >> sys.stderr, '%d examples associate with topics.' % (num_topic_annots)
 
+    num_slogan_annots = len([x for x in meta_list if 'slogans' in x])
+    print >> sys.stderr, '%d examples associate with slogans.' % (num_slogan_annots)
+
+    num_neg_slogan_annots = len([x for x in meta_list if 'negative_slogans' in x])
+    print >> sys.stderr, '%d examples associate with negative slogans.' % (num_neg_slogan_annots)
+
     num_stmt_annots = len([x for x in meta_list if 'statements' in x])
     print >> sys.stderr, '%d examples associate with statements.' % (num_stmt_annots)
 
-    num_qa_annots = len([x for x in meta_list if 'questions' in x])
-    print >> sys.stderr, '%d examples associate with question-answer pairs.' % (num_qa_annots)
-
     num_neg_stmt_annots = len([x for x in meta_list if 'negative_statements' in x])
     print >> sys.stderr, '%d examples associate with negative statements.' % (num_neg_stmt_annots)
+
+    num_hard_neg_stmt_annots = len([x for x in meta_list if 'hard_negative_statements' in x])
+    print >> sys.stderr, '%d examples associate with hard negative statements.' % (num_hard_neg_stmt_annots)
+
+    num_qa_annots = len([x for x in meta_list if 'questions' in x])
+    print >> sys.stderr, '%d examples associate with question-answer pairs.' % (num_qa_annots)
 
     num_densecap_annots = len([x for x in meta_list if 'densecap_objects' in x])
     print >> sys.stderr, '%d examples associate with densecap annotations.' % (num_densecap_annots)
@@ -423,6 +454,30 @@ class AdsApi(object):
     answer = self._revise_reason_to_answer('Because' + reason[len('because'):])
     return question, answer
 
+  def _process_slogan(self, slogan_annotations, num_positive_slogans):
+    """Process slogan annotations.
+
+    Modifies 'slogans' data field in the meta data.
+
+    Args:
+      slogan_annotations: a file containing slogan annotations.
+      num_positive_slogans: number of positive slogans needed.
+    """
+    with open(slogan_annotations, 'r') as fp:
+      annots = json.loads(fp.read())
+
+    for image_id, slogans in annots.iteritems():
+      meta = self._meta[image_id]
+
+      # Process slogans.
+      slogans = [convert_to_printable(slogan) for slogan in slogans]
+
+      if len(slogans) > 0:
+        if num_positive_slogans is None:
+          meta['slogans'] = slogans
+        elif len(slogans) >= num_positive_slogans:
+          meta['slogans'] = slogans[:num_positive_slogans]
+
   def _process_combined_action_reason(self,
       qa_action_reason_annotations, num_positive_statements):
     """Processes action reason annotations.
@@ -537,19 +592,73 @@ class AdsApi(object):
       negative_examples_per_image: number of negative examples of each image.
     """
     random.seed(286)
+    #meta_list = [meta for meta in self.get_meta_list() \
+    #            if 'statements' in meta and meta['split'] != 'train']
     meta_list = [meta for meta in self.get_meta_list() \
-                if 'statements' in meta and meta['split'] != 'train']
+                if 'statements' in meta]
 
     for i, meta in enumerate(meta_list):
-      if i % 5000 == 0:
-        print >> sys.stderr, 'Sampled: %d/%d' % (i, len(meta_list))
       neg_stmts = []
       for _ in xrange(negative_examples_per_image):
         index = random.randint(1, len(meta_list) - 1)
+        index = (i + index) % len(meta_list)
+        assert index != i
         stmts = meta_list[index]['statements']
         index = random.randint(0, len(stmts) - 1)
         neg_stmts.append(stmts[index])
       meta['negative_statements'] = neg_stmts
+
+  def _sample_hard_negative_statements(self, negative_examples_per_image):
+    """Randomly sample negative statements, only for evaluation purpose.
+
+    Modify 'negative_statements' data field.
+
+    Args:
+      negative_examples_per_image: number of negative examples of each image.
+    """
+    random.seed(286)
+    meta_list = [meta for meta in self.get_meta_list() \
+                if 'statements' in meta and meta['split'] != 'train']
+
+    # Build a reverse index: topic_id -> meta list.
+    rindex = {}
+    for meta in meta_list:
+      rindex.setdefault(meta.get('topic_id', 0), []).append(meta)
+
+    for topic_id, meta_list in rindex.iteritems():
+      for i, meta in enumerate(meta_list):
+        neg_stmts = []
+        for _ in xrange(negative_examples_per_image):
+          index = random.randint(1, len(meta_list) - 1)
+          index = (i + index) % len(meta_list)
+          assert index != i
+          stmts = meta_list[index]['statements']
+          index = random.randint(0, len(stmts) - 1)
+          neg_stmts.append(stmts[index])
+        meta['hard_negative_statements'] = neg_stmts
+
+  def _sample_negative_slogans(self, negative_examples_per_image):
+    """Randomly sample negative slogans, only for evaluation purpose.
+
+    Modify 'negative_slogans' data field.
+
+    Args:
+      negative_examples_per_image: number of negative examples of each image.
+    """
+    random.seed(286)
+    meta_list = [meta for meta in self.get_meta_list() \
+                if 'slogans' in meta and meta['split'] != 'train']
+
+    for i, meta in enumerate(meta_list):
+      neg_slogans = []
+      for _ in xrange(negative_examples_per_image):
+        index = random.randint(1, len(meta_list) - 1)
+        index = (i + index) % len(meta_list)
+        assert index != i
+        slogans = meta_list[index]['slogans']
+        index = random.randint(0, len(slogans) - 1)
+        neg_slogans.append(slogans[index])
+      meta['negative_slogans'] = neg_slogans
 
   def _process_densecap(self, densecap_annotations):
     """Process densecap annotations.
@@ -563,8 +672,8 @@ class AdsApi(object):
       annots = json.loads(fp.read())
 
     for i, (image_id, annot) in enumerate(annots.iteritems()):
-      if i % 1000 == 0:
-        print >> sys.stderr, 'Densecap: %d/%d' % (i, len(annots))
+      #if i % 1000 == 0:
+      #  print >> sys.stderr, 'Densecap: %d/%d' % (i, len(annots))
       meta = self._meta[image_id]
       meta['densecap_objects'] = annot
 
@@ -602,4 +711,4 @@ class AdsApi(object):
                 })
 
 if __name__ == '__main__':
-  api = AdsApi('configs/ads_api.config', invalid_items=['densecap_annotations'])
+  api = AdsApi('configs/ads_api.config.0', invalid_items=[])
