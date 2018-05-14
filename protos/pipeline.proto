@@ -1,0 +1,20 @@
+syntax = "proto2";
+
+import "protos/ads_mem_examples.proto";
+import "protos/model.proto";
+import "protos/train_config.proto";
+import "protos/eval_config.proto";
+
+message Pipeline {
+  // The ads example reader.
+  optional AdsMemExamples example_reader = 1;
+
+  // The model.
+  optional Model model = 2;
+
+  // Train config.
+  optional TrainConfig train_config = 3;
+
+  // Eval config
+  optional EvalConfig eval_config = 4;
+}

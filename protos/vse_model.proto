@@ -1,0 +1,22 @@
+syntax = "proto2";
+
+import "protos/utils.proto";
+import "protos/text_encoders.proto";
+import "protos/triplet_mining.proto";
+
+message VSEModel {
+  // Config used to encode image features.
+  optional FCEncoder image_encoder = 1;
+
+  // Config used to encode statements.
+  optional TextEncoder stmt_encoder = 2;
+
+  // Keep probability for both image and text embedding.
+  optional float joint_emb_dropout_keep_prob = 10 [ default = 1.0 ];
+
+  // Triplet mining method using to compute the loss.
+  optional TripletMining triplet_mining = 11;
+
+  // Margin alpha of the triplet loss.
+  optional float triplet_margin = 12 [ default = 0.2 ];
+}

@@ -1,0 +1,12 @@
+syntax = "proto2";
+
+message EvalConfig {
+  // Minimum global step for evaluation.
+  optional int32 eval_min_global_steps = 1 [ default = 500 ];
+
+  // Number of training steps.
+  optional int32 number_of_steps = 2;
+
+  // Eval interval seconds.
+  optional int32 eval_interval_secs = 3 [ default = 600 ];
+}

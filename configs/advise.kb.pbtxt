@@ -1,0 +1,220 @@
+example_reader {
+  batch_size: 128
+  feature_dimensions: 1536
+  max_stmts_per_image: 5
+  max_stmt_len: 30
+  max_densecaps_per_image: 5
+  max_densecap_len: 10
+  max_symbols_per_image: 5
+  use_single_densecap: true
+  shuffle_buffer_size: 20000
+  number_of_regions: 10
+  image_feature_path: "output/img_features_train.npy"
+  region_feature_path: "output/roi_features_train.npy"
+  number_of_val_examples: 10000
+  statement_vocab_path: "output/action_reason_vocab_200d.txt"
+  statement_annot_path: "data/train/QA_Combined_Action_Reason_train.json"
+  densecap_vocab_path: "output/densecap_vocab_200d.txt"
+  densecap_annot_path: "output/densecap_train.json"
+  symbol_annot_path: "output/symbol_train.json"
+  symbol_cluster_path: "data/additional/clustered_symbol_list.json"
+}
+model {
+  advise_model {
+    use_image_as_proposal: true
+    pooling_method: ATT_POOL
+    image_encoder {
+      scope: "image_encoder"
+      num_outputs: 200
+      input_dropout_keep_prob: 0.7
+      output_dropout_keep_prob: 1.0
+      fc_hyperparams: {
+        op: FC
+        activation: NONE
+        regularizer {
+          l2_regularizer {
+            weight: 1e-6
+          }
+        }
+        initializer {
+          truncated_normal_initializer {
+            stddev: 0.03
+            mean: 0.0
+          }
+        }
+        batch_norm {
+          train: true
+          scale: true
+          center: true
+          decay: 0.999
+          epsilon: 0.001
+        }
+      }
+    }
+    image_decoder {
+      scope: "image_decoder"
+      num_outputs: 1536
+      input_dropout_keep_prob: 0.7
+      output_dropout_keep_prob: 1.0
+      fc_hyperparams: {
+        op: FC
+        activation: NONE
+        regularizer {
+          l2_regularizer {
+            weight: 1e-6
+          }
+        }
+        initializer {
+          truncated_normal_initializer {
+            stddev: 0.03
+            mean: 0.0
+          }
+        }
+        batch_norm {
+          train: true
+          scale: true
+          center: true
+          decay: 0.999
+          epsilon: 0.001
+        }
+      }
+    }
+    image_attention_predictor {
+      scope: "image_attention_predictor"
+      num_outputs: 1
+      input_dropout_keep_prob: 0.7
+      output_dropout_keep_prob: 1.0
+      fc_hyperparams: {
+        op: FC
+        activation: NONE
+        regularizer {
+          l2_regularizer {
+            weight: 1e-8
+          }
+        }
+        initializer {
+          truncated_normal_initializer {
+            stddev: 0.03
+            mean: 0.0
+          }
+        }
+        batch_norm {
+          train: true
+          scale: true
+          center: true
+          decay: 0.999
+          epsilon: 0.001
+        }
+      }
+    }
+    stmt_encoder {
+      bow_encoder {
+        scope: "stmt_encoder"
+        vocab_size: 25333
+        embedding_size: 200
+        init_width: 0.08
+        weight_decay: 1e-8
+        dropout_keep_prob: 0.7
+        init_emb_matrix_path: "output/action_reason_vocab_200d.npy"
+        repr_method: USE_OUTPUT_AVG
+      }
+    }
+    symbol_encoder {
+      bow_encoder {
+        scope: "symbol_encoder"
+        vocab_size: 54
+        embedding_size: 200
+        init_width: 0.08
+        weight_decay: 1e-8
+        dropout_keep_prob: 0.7
+        init_emb_matrix_path: "output/symbol_vocab_200d.npy"
+        repr_method: USE_OUTPUT_AVG
+      }
+    }
+    densecap_encoder {
+      bow_encoder {
+        scope: "densecap_encoder"
+        vocab_size: 988
+        embedding_size: 200
+        init_width: 0.08
+        weight_decay: 1e-8
+        dropout_keep_prob: 0.7
+        init_emb_matrix_path: "output/densecap_vocab_200d.npy"
+        repr_method: USE_OUTPUT_AVG
+      }
+    }
+    symbol_classifier {
+      scope: "symbol_classifier"
+      checkpoint_path: "output/symbol_classifier/model.ckpt"
+      hidden_layers: 1
+      hidden_units: 100
+      output_units: 54
+      input_dropout_keep_prob: 0.5
+      hidden_dropout_keep_prob: 0.5
+      hidden_hyperparams: {
+        op: FC
+        activation: RELU
+        regularizer {
+          l2_regularizer {
+            weight: 1e-8
+          }
+        }
+        initializer {
+          truncated_normal_initializer {
+            stddev: 0.03
+            mean: 0.0
+          }
+        }
+      }
+      output_hyperparams: {
+        op: FC
+        activation: NONE
+        regularizer {
+          l2_regularizer {
+            weight: 1e-8
+          }
+        }
+        initializer {
+          truncated_normal_initializer {
+            stddev: 0.03
+            mean: 0.0
+          }
+        }
+      }
+    }
+    joint_emb_dropout_keep_prob: 0.5
+    triplet_mining {
+      mine_hard {
+        top_k: 32
+      }
+    }
+    triplet_margin: 0.2
+    autoencoder_loss_weight: 0.0
+    densecap_loss_weight: 0.1
+    symbol_loss_weight: 0.1
+    log_prob_loss_weight: 0.0
+    use_knowledge_branch: true
+    symbol_cluster_path: "data/additional/clustered_symbol_list.json"
+  }
+}
+train_config {
+  learning_rate: 0.0001
+  optimizer {
+    adam {
+    }
+  }
+  exclude_variable: "symbol_classifier"
+  exclude_variable: "confidence"
+  learning_rate_decay_steps: 50000
+  learning_rate_decay_rate: 1.0
+  learning_rate_staircase: false
+  number_of_steps: 100000
+  log_every_n_steps: 10
+  save_interval_secs: 60
+  save_summaries_secs: 120
+}
+eval_config {
+  eval_min_global_steps: 2000
+  number_of_steps: 100000
+  eval_interval_secs: 60
+}

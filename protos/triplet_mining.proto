@@ -1,0 +1,24 @@
+syntax = "proto2";
+
+message TripletMining {
+  oneof triplet_mining {
+    MineAll mine_all = 1;
+    MineHard mine_hard = 2;
+    MineSemiHard mine_semi_hard = 3;
+    MineRandom mine_random = 4;
+  }
+}
+
+message MineAll {
+}
+
+message MineSemiHard {
+}
+
+message MineHard {
+  optional int32 top_k = 1 [ default = 1 ];
+}
+
+message MineRandom {
+  optional int32 negatives_per_anchor = 1 [ default = 1 ];
+}

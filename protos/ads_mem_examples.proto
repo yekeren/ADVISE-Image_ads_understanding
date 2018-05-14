@@ -1,0 +1,74 @@
+syntax = "proto2";
+
+// Ads example reader.
+message AdsMemExamples {
+  // If true, using debug mode that load only 100 examples.
+  optional bool debug = 999 [ default = false ];
+
+  // Batch size.
+  optional int32 batch_size = 1 [ default = 128 ];
+
+  // The default feature dimensions.
+  optional int32 feature_dimensions = 2 [ default = 1536 ];
+
+  // Maximum number of statements per image.
+  optional int32 max_stmts_per_image = 3 [ default = 3 ];
+
+  // Maximum length of the statements.
+  optional int32 max_stmt_len = 4 [ default = 20 ];
+
+  // Number of regions per image.
+  optional int32 number_of_regions = 5 [ default = 10 ];
+
+  // Number of validation examples.
+  optional int32 number_of_val_examples = 6 [ default = 10000 ];
+
+  // Number of validation statements per image.
+  optional int32 number_of_val_stmts_per_image = 7 [ default = 15 ];
+
+  // Path to the image features.
+  optional string image_feature_path = 10;
+
+  // Path to the image features.
+  optional string region_feature_path = 11;
+
+  // Path to the statement vocabulary file.
+  optional string statement_vocab_path = 15;
+
+  // Path to the statement annotation file.
+  optional string statement_annot_path = 16;
+
+  // Path to the densecap vocabulary file.
+  optional string densecap_vocab_path = 17;
+
+  // Path to the densecap annotation file.
+  optional string densecap_annot_path = 18;
+
+  // Path to the symbol annotation file.
+  optional string symbol_annot_path = 19;
+
+  // Path to the symbol annotation file.
+  optional string symbol_cluster_path = 20;
+
+  // The shuffle buffer size.
+  optional int32 shuffle_buffer_size = 25 [ default = 1000 ];
+
+  // Mode to provide data.
+  enum DataProviderMode {
+    FROM_CPU = 1;
+    FROM_GPU = 2;
+  }
+  optional DataProviderMode data_provider_mode = 26 [ default = FROM_CPU ];
+
+  // Maximum number of the densecap strings.
+  optional int32 max_densecaps_per_image = 30 [ default = 10 ];
+
+  // Maximum length of the densecap string.
+  optional int32 max_densecap_len = 31 [ default = 10 ];
+
+  // If true, use SOW (set of word) coding to represent densecap.
+  optional bool use_single_densecap = 32 [ default = false ];
+
+  // Maximum number of symbols.
+  optional int32 max_symbols_per_image = 33 [ default = 5 ];
+}

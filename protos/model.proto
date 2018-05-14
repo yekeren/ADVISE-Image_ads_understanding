@@ -1,0 +1,11 @@
+syntax = "proto2";
+
+import "protos/vse_model.proto";
+import "protos/advise_model.proto";
+
+message Model {
+  oneof model {
+    VSEModel vse_model = 1;
+    ADVISEModel advise_model = 2;
+  }
+}

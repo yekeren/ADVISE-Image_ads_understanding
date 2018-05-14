@@ -1,0 +1,35 @@
+syntax = "proto2";
+
+import "object_detection/protos/hyperparams.proto";
+
+// FCExtractor
+message MLPModel {
+  optional string scope = 1 [ default = 'mlp' ];
+
+  // Input dropout keep prob.
+  optional float input_dropout_keep_prob = 2 [ default = 1.0 ];
+
+  // Hyper parameters for the hidden layers.
+  optional object_detection.protos.Hyperparams hidden_hyperparams = 3;
+
+  // Number of hidden layers.
+  optional int32 hidden_layers = 4 [ default = 0 ];
+
+  // Number of hidden units.
+  optional int32 hidden_units = 5 [ default = 256 ];
+
+  // Dropout keep probability of hidden layers.
+  optional float hidden_dropout_keep_prob = 6 [ default = 1.0 ];
+
+  // Hyper parameters for the output layer.
+  optional object_detection.protos.Hyperparams output_hyperparams = 7;
+
+  // Number of output units.
+  optional int32 output_units = 8 [ default = 256 ];
+
+  // Dropout keep probability of output layers.
+  optional float output_dropout_keep_prob = 9 [ default = 1.0 ];
+
+  // Path to the checkpoint file.
+  optional string checkpoint_path = 10 [ default = "" ];
+}

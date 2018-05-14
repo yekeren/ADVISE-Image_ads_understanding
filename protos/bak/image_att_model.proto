@@ -1,0 +1,51 @@
+syntax = "proto2";
+
+import "protos/utils.proto";
+import "protos/text_encoders.proto";
+import "protos/triplet_mining.proto";
+
+message ImageAttModel {
+  // If True, also add image as a proposal.
+  optional bool use_image_as_proposal = 1 [ default = true ];
+
+  // Config used to encode image features.
+  optional FCEncoder image_encoder = 2;
+
+  // Config used to encode image features.
+  optional FCEncoder image_decoder = 3;
+
+  // Config used to encode statements.
+  optional TextEncoder stmt_encoder = 4;
+
+  // Pooling method.
+  enum PoolingMethod {
+    AVG_POOL = 1;
+    ATT_POOL = 2;
+    ATT_POOL_DS_SUM = 3;
+    ATT_POOL_DS_MAX = 4;
+  }
+  optional PoolingMethod pooling_method = 5 [ default = AVG_POOL ];
+
+  // Config used to predict image attention.
+  optional FCEncoder image_attention_predictor = 6;
+
+  // Keep probability for both image and text embedding.
+  optional float joint_emb_dropout_keep_prob = 16 [ default = 1.0 ];
+
+  // Triplet mining method using to compute the loss.
+  optional TripletMining triplet_mining = 17;
+
+  // Margin alpha of the triplet loss.
+  optional float triplet_margin = 18 [ default = 0.1 ];
+
+  // Weight of the autoencoder loss.
+  optional float autoencoder_loss_weight = 19 [ default = 1.0 ];
+
+  // Weight of the log prob loss.
+  optional float log_prob_loss_weight = 20 [ default = 0.0 ];
+
+  // If True, use adversarial dropout strategy during training.
+  optional bool use_adversarial_dropout = 21 [ default = false ];
+}
+
+

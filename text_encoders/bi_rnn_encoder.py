@@ -13,21 +13,21 @@ from text_encoders.text_encoder import TextEncoder
 slim = tf.contrib.slim
 
 
-class RNNEncoder(TextEncoder):
+class BiRNNEncoder(TextEncoder):
 
   def __init__(self, model_proto, is_training):
-    """Initializes RNNEncoder.
+    """Initializes BiRNNEncoder.
 
     Args:
-      model_proto: an instance of RNNEncoder proto.
+      model_proto: an instance of BiRNNEncoder proto.
 
     Raises:
       ValueError: if model_proto is invalid.
     """
-    super(RNNEncoder, self).__init__(model_proto, is_training)
+    super(BiRNNEncoder, self).__init__(model_proto, is_training)
 
-    if not isinstance(model_proto, text_encoders_pb2.RNNEncoder):
-      raise ValueError('The model_proto has to be an instance of RNNEncoder.')
+    if not isinstance(model_proto, text_encoders_pb2.BiRNNEncoder):
+      raise ValueError('The model_proto has to be an instance of BiRNNEncoder.')
 
     if model_proto.cell_type != 'LSTM':
       raise ValueError('Only LSTM is supported.')
@@ -116,31 +116,23 @@ class RNNEncoder(TextEncoder):
 
     # Build RNN.
     with tf.variable_scope(model_proto.scope, initializer=initializer) as rnn_scope:
-      outputs, encoded_state = tf.nn.dynamic_rnn(
-          cell=rnn_cell,
+      outputs, encoded_state = tf.nn.bidirectional_dynamic_rnn(
+          cell_fw=rnn_cell,
+          cell_bw=rnn_cell,
           inputs=embeddings,
           sequence_length=text_lengths,
           dtype=tf.float32,
           scope=rnn_scope)
 
-    state = encoded_state[-1].h
-    if model_proto.repr_method == text_encoders_pb2.RNNEncoder.USE_OUTPUT_AVG:
-      _, max_text_len = text_strings.get_shape().as_list()
-      if max_text_len is None:
-        max_text_len = tf.shape(text_strings, out_type=tf.int32)[1]
+    outputs_fw, outputs_bw = outputs
+    states_fw, states_bw = encoded_state
 
-      boolean_masks = tf.less(
-          tf.range(max_text_len, dtype=tf.int32), 
-          tf.expand_dims(tf.cast(text_lengths, tf.int32), 1))
-
-      weights = tf.cast(boolean_masks, tf.float32)
-      weights = tf.div(weights, 
-          tf.maximum(1e-12, tf.tile( 
-              tf.expand_dims(tf.cast(text_lengths, tf.float32), 1), 
-              tf.stack([1, max_text_len]))))
-
-      state = tf.squeeze(
-          tf.matmul(tf.expand_dims(weights, 1), outputs), [1])
+    if model_proto.repr_method == text_encoders_pb2.BiRNNEncoder.USE_CONCAT:
+      outputs = tf.concat([outputs_fw, outputs_bw], 2)
+      states = tf.concat([states_fw[-1].h, states_bw[-1].h], 1)
+    elif model_proto.repr_method == text_encoders_pb2.BiRNNEncoder.USE_AVERAGE:
+      outputs = 0.5 * (outputs_fw + outputs_bw)
+      states = 0.5 * (states_fw[-1].h + states_bw[-1].h)
 
     self._set_init_fn(embedding_weights, model_proto.init_emb_matrix_path)
-    return state, outputs, embeddings
+    return states, outputs, embeddings

@@ -1,0 +1,139 @@
+syntax = "proto2";
+
+message TextEncoder {
+  oneof text_encoder {
+    BOWEncoder bow_encoder = 1;
+    RNNEncoder rnn_encoder = 2;
+    BiRNNEncoder bi_rnn_encoder = 3;
+  }
+}
+
+message BOWEncoder {
+  // Variable scope.
+  optional string scope = 1 [ default = 'bow_encoder' ];
+
+  // Vocabulary size.
+  optional int32 vocab_size = 2;
+
+  // Dimensions of the embedding vector.
+  optional int32 embedding_size = 3 [ default = 200 ];
+
+  // Init width of word embedding.
+  optional float init_width = 4 [ default = 0.08 ];
+
+  // Embedding weights: weight decay.
+  optional float weight_decay = 5 [ default = 0.0 ];
+
+  // File to initialize word embedding matrix from.
+  optional string init_emb_matrix_path = 6 [ default = "" ];
+
+  // Dropout keep probability of the word embedding.
+  optional float dropout_keep_prob = 7 [ default = 1.0 ];
+
+  // If true, train word embedding.
+  optional bool trainable = 8 [ default = true ];
+
+  // BOW: the method using to compute the final representation.
+  enum ReprMethod {
+    USE_OUTPUT_AVG = 1;
+    USE_OUTPUT_SUM = 2;
+  }
+  optional ReprMethod repr_method = 16 [ default = USE_OUTPUT_AVG ];
+}
+
+message RNNEncoder {
+  // Variable scope.
+  optional string scope = 1 [ default = 'rnn_encoder' ];
+
+  // Vocabulary size.
+  optional int32 vocab_size = 2;
+
+  // Dimensions of embedding vector.
+  optional int32 embedding_size = 3 [ default = 200 ];
+
+  // Init width of word embedding.
+  optional float init_width = 4 [ default = 0.08 ];
+
+  // Embedding weights: Weight decay.
+  optional float weight_decay = 5 [ default = 0.0 ];
+
+  // File to initialize word embedding matrix from.
+  optional string init_emb_matrix_path = 6 [ default = "" ];
+
+  // If true, train word embedding.
+  optional bool trainable = 7 [ default = true ];
+
+  // RNN: cell type.
+  optional string cell_type = 10 [ default = "LSTM" ];
+
+  // RNN: number of hidden units.
+  optional int32 rnn_num_units = 11 [ default = 128 ];
+
+  // RNN: number of layers.
+  optional int32 rnn_num_layers = 12 [ default = 1 ];
+
+  // RNN: input keep probability of rnn cell.
+  optional float rnn_input_keep_prob = 13 [ default = 1.0 ];
+
+  // RNN: output keep probability of rnn cell.
+  optional float rnn_output_keep_prob = 14 [ default = 1.0 ];
+
+  // RNN: output keep probability of rnn cell.
+  optional float rnn_state_keep_prob = 15 [ default = 1.0 ];
+
+  // RNN: the method using to compute the final representation.
+  enum ReprMethod {
+    USE_LAST_H = 1;
+    USE_OUTPUT_AVG = 2;
+    USE_OUTPUT_SUM = 3;
+  }
+  optional ReprMethod repr_method = 16 [ default = USE_OUTPUT_AVG ];
+}
+
+message BiRNNEncoder {
+  // Variable scope.
+  optional string scope = 1 [ default = 'bi_rnn_encoder' ];
+
+  // Vocabulary size.
+  optional int32 vocab_size = 2;
+
+  // Dimensions of embedding vector.
+  optional int32 embedding_size = 3 [ default = 200 ];
+
+  // Init width of word embedding.
+  optional float init_width = 4 [ default = 0.08 ];
+
+  // Embedding weights: Weight decay.
+  optional float weight_decay = 5 [ default = 0.0 ];
+
+  // File to initialize word embedding matrix from.
+  optional string init_emb_matrix_path = 6 [ default = "" ];
+
+  // If true, train word embedding.
+  optional bool trainable = 7 [ default = true ];
+
+  // RNN: cell type.
+  optional string cell_type = 10 [ default = "LSTM" ];
+
+  // RNN: number of hidden units.
+  optional int32 rnn_num_units = 11 [ default = 128 ];
+
+  // RNN: number of layers.
+  optional int32 rnn_num_layers = 12 [ default = 1 ];
+
+  // RNN: input keep probability of rnn cell.
+  optional float rnn_input_keep_prob = 13 [ default = 1.0 ];
+
+  // RNN: output keep probability of rnn cell.
+  optional float rnn_output_keep_prob = 14 [ default = 1.0 ];
+
+  // RNN: output keep probability of rnn cell.
+  optional float rnn_state_keep_prob = 15 [ default = 1.0 ];
+
+  // RNN: the method using to compute the final representation.
+  enum ReprMethod {
+    USE_CONCAT = 1;
+    USE_AVERAGE = 2;
+  }
+  optional ReprMethod repr_method = 16 [ default = USE_AVERAGE ];
+}

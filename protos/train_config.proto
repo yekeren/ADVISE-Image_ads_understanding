@@ -1,0 +1,63 @@
+syntax = "proto2";
+
+message TrainConfig {
+  // Optimizer.
+  optional Optimizer optimizer = 1;
+
+  // Learning rate.
+  optional float learning_rate = 2;
+
+  // Learning rate decay steps.
+  optional float learning_rate_decay_steps = 3 [ default = 2000 ];
+
+  // Learning rate decay rate.
+  optional float learning_rate_decay_rate = 4 [ default = 1.0 ];
+
+  // Learining rate staircase.
+  optional bool learning_rate_staircase = 5 [ default = true ];
+
+  // Number of training steps.
+  optional int32 number_of_steps = 11;
+
+  // Write log every log_every_n_steps steps.
+  optional int32 log_every_n_steps = 12 [ default = 10 ];
+
+  // Save model every save_interval_secs secs.
+  optional int32 save_interval_secs = 13 [ default = 600 ];
+
+  // Save summaries every save_summaries_secs secs.
+  optional int32 save_summaries_secs = 14 [ default = 600 ];
+
+  // If true, use moving average of the variables.
+  optional bool moving_average = 15 [ default = false ];
+
+  // Gradient multipliers.
+  repeated GradientMultiplier gradient_multiplier = 16;
+
+  // If specified, exclude these variables scopes when load from checkpoint.
+  repeated string exclude_variable = 17;
+}
+
+message GradientMultiplier {
+  optional string scope = 1;
+  optional float multiplier = 2;
+}
+
+message Optimizer {
+  oneof optimizer {
+    AdamOptimizer adam = 1;
+    AdagradOptimizer adagrad = 2;
+    RMSPropOptimizer rmsprop = 3;
+  }
+}
+
+message AdamOptimizer {
+}
+
+message AdagradOptimizer {
+}
+
+message RMSPropOptimizer {
+  optional float decay = 1 [ default = 0.9 ];
+  optional float momentum = 2 [ default = 0.0 ];
+}

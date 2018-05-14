@@ -1,0 +1,31 @@
+syntax = "proto2";
+
+import "object_detection/protos/hyperparams.proto";
+
+message FCEncoder {
+  // The variable scope for image encoder.
+  optional string scope = 1 [ default = 'fc_encoder' ];
+
+  // Number of output units.
+  optional int32 num_outputs = 2 [ default = 200 ];
+
+  // Input dropout keep probability.
+  optional float input_dropout_keep_prob = 3 [ default = 1.0 ];
+
+  // Output dropout keep probability.
+  optional float output_dropout_keep_prob = 4 [ default = 1.0 ];
+
+  // Hyper parameters for the hidden layers.
+  optional object_detection.protos.Hyperparams fc_hyperparams = 5;
+}
+
+//message FCEncoder {
+//  // The variable scope for image encoder.
+//  optional string scope = 1 [ default = 'fc_encoder' ];
+//
+//  // Number of output units.
+//  optional int32 num_outputs = 2 [ default = 200 ];
+//
+//  // Hyper parameters for the hidden layers.
+//  optional object_detection.protos.Hyperparams fc_hyperparams = 4;
+//}

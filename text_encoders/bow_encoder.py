@@ -6,6 +6,7 @@ from __future__ import print_function
 import numpy as np
 import tensorflow as tf
 
+from tensorflow import logging
 from protos import text_encoders_pb2
 from text_encoders.text_encoder import TextEncoder
 
@@ -14,111 +15,97 @@ slim = tf.contrib.slim
 
 class BOWEncoder(TextEncoder):
 
-  def __init__(self, model_proto):
+  def __init__(self, model_proto, is_training):
     """Initializes BOWEncoder.
 
     Args:
       model_proto: an instance of BOWEncoder proto.
     """
+    super(BOWEncoder, self).__init__(model_proto, is_training)
+
     if not isinstance(model_proto, text_encoders_pb2.BOWEncoder):
-      raise ValueError('model_proto has to be an instance of BOWEncoder.')
-    self._model_proto = model_proto
+      raise ValueError('The model_proto has to be an instance of BOWEncoder.')
 
-  @property
-  def scope(self):
-    """Returns variable scope."""
-    return self._model_proto.scope
-
-  def assign_from_checkpoint_fn(self, checkpoint_path):
-    """Returns a function to load from checkpoint.
+  def _set_init_fn(self, embedding_weights, filename):
+    """Sets the initialization function.
 
     Args:
-      checkpoint_path: path to the checkpoint file.
-
-    Returns:
-      assign_fn: a function that that load weights from checkpoint.
+      embedding_weights: a [vocab_size, embedding_size] tensor denoting
+        embedding matrix.
+      filename: the file path to initialize word embedding matrix from.
     """
-    if checkpoint_path:
-      with open(checkpoint_path, 'rb') as fp:
-        w2v = np.load(fp)
+    if not filename:
+      def _default_init_fn(_):
+        pass
+      self._init_fn = _default_init_fn
 
-        # Pad for UNK_ID.
-        pad = np.zeros([1, w2v.shape[1]], dtype=np.float32)
-        w2v = np.concatenate([pad, w2v], 0)
-
-        # Assign value for the variable.
+    else:
+      with open(filename, 'rb') as fp:
+        word2vec = np.load(fp)
         init_assign_op, init_feed_dict = slim.assign_from_values({
-            self.embedding_weights.op.name: w2v} )
+            embedding_weights.op.name: word2vec} )
 
-      def _assign_fn(sess):
-        tf.logging.info('BOWEncoder::assign_fn is called, checkpoint_path=%s.',
-            checkpoint_path)
+      def _init_fn(sess):
         sess.run(init_assign_op, init_feed_dict)
+        logging.info('Initialize word embedding from %s.', filename)
 
-      return _assign_fn
+      self._init_fn = _init_fn
 
-    def _empty_assign_fn(sess):
-      tf.logging.info('BOWEncoder::empty_assign_fn is called.')
-
-    return _empty_assign_fn
-
-  def encode(self, text_lengths, text_strings, is_training=True):
+  def encode(self, text_strings, text_lengths):
     """Encodes texts into embedding vectors.
 
     Args:
-      text_lengths: a [batch] tensor indicating lenghts of each text.
       text_strings: a [batch, max_text_len] tensor indicating multiple texts.
-      is_training: if True, update batch norm parameters.
+      text_lengths: a [batch] tensor indicating lenghts of each text.
 
     Returns:
-      embeddings: a [batch, embedding_size] tensor indicating embedding vectors
-        of text_strings.
+      text_encoded: a [batch, embedding_size] tensor indicating final encoding.
+      text_embedding: a [batch, max_text_len, embedding_size] tf.float tensor.
     """
     model_proto = self._model_proto
+    is_training = self._is_training
 
-    embedding_weights = self.build_weights(
-        vocab_size=model_proto.vocab_size,
-        embedding_size=model_proto.embedding_size,
-        init_width=model_proto.init_width,
-        weight_decay=model_proto.weight_decay)
+    # Build word embedding weights.
+    init_width = model_proto.init_width
+    weight_decay = model_proto.weight_decay
 
+    embedding_weights = tf.get_variable(
+        name='{}/weights'.format(model_proto.scope),
+        shape=[model_proto.vocab_size, model_proto.embedding_size],
+        trainable=model_proto.trainable,
+        initializer=tf.random_uniform_initializer(-init_width, init_width),
+        regularizer=slim.l2_regularizer(weight_decay))
     embeddings = tf.nn.embedding_lookup(embedding_weights, text_strings)
-    if text_encoders_pb2.BOWEncoder.RELU_6 == model_proto.activation_fn:
-      if not is_training:
-        embeddings = tf.nn.relu6(embeddings)
-      else:
-        # leaky relu.
-        alpha = model_proto.leaky_relu_alpha
-        embeddings = tf.maximum(alpha * embeddings, embeddings)
-    elif text_encoders_pb2.BOWEncoder.SIGMOID == model_proto.activation_fn:
-      embeddings = tf.sigmoid(embeddings)
+    embeddings = slim.dropout(embeddings, model_proto.dropout_keep_prob,
+        is_training=is_training)
+    self.embedding_weights = embedding_weights
 
-    if is_training:
-      embeddings = tf.nn.dropout(embeddings, model_proto.keep_prob)
+    norms = tf.norm(embedding_weights, axis=1)
+    tf.summary.scalar(
+        '{}/norm_max'.format(model_proto.scope), tf.reduce_max(norms))
+    tf.summary.scalar(
+        '{}/norm_min'.format(model_proto.scope), tf.reduce_min(norms))
+    tf.summary.scalar(
+        '{}/norm_avg'.format(model_proto.scope), tf.reduce_mean(norms))
 
-    # Average embeddings by weights to get the representation of each string.
-    batch_size, max_text_len = text_strings.get_shape().as_list()
+    # Average word embedding vectors.
+    _, max_text_len = text_strings.get_shape().as_list()
+    if max_text_len is None:
+      max_text_len = tf.shape(text_strings, out_type=tf.int32)[1]
 
     boolean_masks = tf.less(
-        tf.range(max_text_len, dtype=tf.int64),
-        tf.expand_dims(text_lengths, 1))
-    weights = tf.cast(boolean_masks, tf.float32)
+        tf.range(max_text_len, dtype=tf.int32), 
+        tf.expand_dims(tf.cast(text_lengths, tf.int32), 1))
 
-    if model_proto.average_method == text_encoders_pb2.BOWEncoder.AVG:
-      # Average word embedding vectors.
+    weights = tf.cast(boolean_masks, tf.float32)
+    if model_proto.repr_method == text_encoders_pb2.BOWEncoder.USE_OUTPUT_AVG:
       weights = tf.div(weights, 
           tf.maximum(1e-12, tf.tile( 
               tf.expand_dims(tf.cast(text_lengths, tf.float32), 1), 
-              [1, max_text_len])))
+              tf.stack([1, max_text_len]))))
 
-    elif model_proto.average_method == text_encoders_pb2.BOWEncoder.SUM:
-      # Sum word embedding vectors.
-      pass
+    text_encoded = tf.squeeze(
+        tf.matmul(tf.expand_dims(weights, 1), embeddings), [1])
 
-    else:
-      raise ValueError('Invalid average method %s.' % (model_proto.average_method))
-
-    weights = tf.expand_dims(weights, axis=1)
-    embeddings_averaged = tf.squeeze(tf.matmul(weights, embeddings), [1])
-
-    return embeddings_averaged
+    self._set_init_fn(embedding_weights, model_proto.init_emb_matrix_path)
+    return text_encoded, embeddings, embeddings

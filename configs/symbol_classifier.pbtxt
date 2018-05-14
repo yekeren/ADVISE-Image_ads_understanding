@@ -1,0 +1,36 @@
+scope: "symbol_classifier"
+hidden_layers: 1
+hidden_units: 100
+output_units: 54
+input_dropout_keep_prob: 0.5
+hidden_dropout_keep_prob: 0.5
+hidden_hyperparams: {
+  op: FC
+  activation: RELU
+  regularizer {
+    l2_regularizer {
+      weight: 1e-8
+    }
+  }
+  initializer {
+    truncated_normal_initializer {
+      stddev: 0.03
+      mean: 0.0
+    }
+  }
+}
+output_hyperparams: {
+  op: FC
+  activation: NONE
+  regularizer {
+    l2_regularizer {
+      weight: 1e-8
+    }
+  }
+  initializer {
+    truncated_normal_initializer {
+      stddev: 0.03
+      mean: 0.0
+    }
+  }
+}
