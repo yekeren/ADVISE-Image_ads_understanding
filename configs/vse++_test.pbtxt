@@ -3,6 +3,10 @@ example_reader {
   feature_dimensions: 1536
   max_stmts_per_image: 5
   max_stmt_len: 30
+  max_densecaps_per_image: 5
+  max_densecap_len: 10
+  max_symbols_per_image: 5
+  use_single_densecap: true
   shuffle_buffer_size: 20000
   number_of_regions: 10
   image_feature_path: "output/img_features_test.npy"
@@ -12,6 +16,8 @@ example_reader {
   statement_annot_path: "data/test/QA_Combined_Action_Reason_test.json"
   densecap_vocab_path: "output/densecap_vocab_200d.txt"
   densecap_annot_path: "output/densecap_test.json"
+  symbol_annot_path: "output/symbol_test.json"
+  symbol_cluster_path: "data/additional/clustered_symbol_list.json"
 }
 model {
   vse_model {
