@@ -2,13 +2,25 @@
 
 set -x
 
-export PYTHONPATH="${HOME}/work2/object_detection/tensorflow_models:$PYTHONPATH"
-export PYTHONPATH="${HOME}/work2/object_detection/tensorflow_models/slim:$PYTHONPATH"
-
 OUTPUT_DIR="output"
 mkdir -p ${OUTPUT_DIR}
 
 PYTHON="python"  # Path to the python installed.
+GIT='git'  # Path to the git installed.
+
+# Clone the repository of tensorflow models:
+$GIT clone "https://github.com/tensorflow/models.git" "tensorflow_models"
+
+export PYTHONPATH="`pwd`/tensorflow_models/research:$PYTHONPATH"
+export PYTHONPATH="`pwd`/tensorflow_models/research/slim:$PYTHONPATH"
+
+cd "tensorflow_models/research" \
+  && protoc object_detection/protos/*.proto --python_out=. \
+  && cd - || exit -1
+
+test -d "object_detection" \
+  || ln -s "tensorflow_models/research/object_detection" . \
+  || exit -1
 
 ###############################################################
 # Prepare the symbol data, using the 53-symbols ontology.
