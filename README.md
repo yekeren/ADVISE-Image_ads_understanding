@@ -10,7 +10,7 @@ achieves an accuracy of 62% and the <a href="configs/advise.kb.pbtxt">ADVISE</a>
 model achieves an accuracy of 69% in the challenge.
 
 In general, our model utilizes triplet ranking loss to distinguish between 
-related caption-image pair and unrelated caption-image pair caption-image pair. 
+related caption-image pair and unrelated caption-image pair. 
 By doing so, the model project both image patches and words into a shared 
 vector space, which could be later used for tasks such as classification, 
 captioning, vision question answering and so on. Beyond the traditional visual
@@ -49,26 +49,24 @@ cd ADVISE
 a long time to proceed (3-4 hours in our enviroments using GPU). The 
 "prepare\_data.sh" script shall guide you to to:
 
-      - Download the PITT Ads Dataset (>= 11G)
-      - Clone the "tensorflow/models" repository, in which we use the
-      object\_detection API and the InceptionV4 slim model.
-      - Download the pre-trained GloVe model.
-      - Download the pre-traind InceptionV4 model.
-      - Prepare the vocabulary and initial embedding matrix of the action-reason 
-      annotations of the ads data.
-      - Prepare the vocabulary and initial embedding matrix of the DenseCap
-      annotations.
-      - Prepare the vocabulary and initial embedding matrix of the ads symbols.
-      - Extract both the image features and the regional features using
-      InceptionV4 model. Note that we provide two types of region proposals. 
-      <a href="output/symbol_box_test.json">One</a> extracted using the tensorflow
-      object detection API (we trained the model on ads symbol boxes by ourselves), 
-      and <a href="output/densecap_test.json">the other</a> extracted using the 
-      DenseCap model. You could also provide region proposals extracted by 
-      yourselves and encode them using the same JSON format. Note: it is not 
-      necessary to extract features using both of the two region proposals. 
-      So you can comment out either the symbol box or the densecap box 
-      ("prepare_data.sh" line 144-166).
+    - Download the PITT Ads Dataset (>= 11G)
+    - Clone the "tensorflow/models" repository, in which we use the
+    object\_detection API and the InceptionV4 slim model.
+    - Download the pre-trained GloVe model.
+    - Download the pre-traind InceptionV4 model.
+    - Prepare the vocabulary and initial embedding matrix of the action-reason annotations of the ads data.
+    - Prepare the vocabulary and initial embedding matrix of the DenseCap annotations.
+    - Prepare the vocabulary and initial embedding matrix of the ads symbols.
+    - Extract both the image features and the regional features using
+    InceptionV4 model. Note that we provide two types of region proposals. 
+    <a href="output/symbol_box_test.json">One</a> extracted using the tensorflow
+    object detection API (we trained the model on ads symbol boxes by ourselves), 
+    and <a href="output/densecap_test.json">the other</a> extracted using the 
+    DenseCap model. You could also provide region proposals extracted by 
+    yourselves and encode them using the same JSON format. Note: it is not 
+    necessary to extract features using both of the two region proposals. 
+    So you can comment out either the symbol box or the densecap box 
+    ("prepare_data.sh" line 144-166).
 
 
 ```
