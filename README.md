@@ -28,18 +28,6 @@ Decoding Advertisements." arXiv preprint arXiv:1711.06666 (2017).
 ```
 \[[link](https://arxiv.org/pdf/1711.06666.pdf)\]\[[bibtex](https://scholar.googleusercontent.com/scholar.bib?q=info:K2QWc_pL9-YJ:scholar.google.com/&output=citation&scisig=AAGBfm0AAAAAWvsX4yeW9FRFUealOfUsxcfTEzOL2F4A&scisf=4&ct=citation&cd=-1&hl=en)\]
 
-## Method
-
-There are mainly three components in the implementation: region proposal
-network, image feature extractor, and text embedder. Generally speaking, region
-proposal network is responsible to predict highly probable objects and provides
-bounding box information of these objects. Given these boxes, image feature
-extractor crops image patches from the input image and extract patch level
-feature representation. The final image level representation is a combination of
-the patch representations. At the meantime, text embedder encodes statements 
-into the same feature space as the image representation. Triplet loss is used to
-train the whole network.
-
 ## Prerequisites
 Tensorflow >= version 1.6
 
@@ -102,11 +90,72 @@ using <a href="http://localhost:8009/symbol_box.html">http://localhost:8009/symb
 or <a href="http://localhost:8009/densecap_box.html">http://localhost:8009/densecap_box.html</a>.
 You shall see results similar to:
 
-![symbol box visualizationtext][symbol_box | width=200] 
-![densecap box visualizationtext][densecap_box | width=200]
+<img src="docs/symbol_box.png" alt="symbol box" height=300>
+<img src="docs/densecap_box.png" alt="densecap box" height=300>
 
-[symbol_box]: https://github.com/yekeren/ADVISE/blob/master/docs/symbol_box.png "Logo Title Text 2"
-[densecap_box]: https://github.com/yekeren/ADVISE/blob/master/docs/densecap_box.png "Logo Title Text 2"
+* After executing the "prepare_data.sh", you could check the md5 of all the
+generated files. Go back to the ROOT directory, then process the following
+command. The md5sum of the text file or the JSON file should be matched exactly.
+For the numpy file in binary format, they may differ.
+```
+-bash-4.2$ md5sum output/*
+36d0aad26211f30354e090aaa47d4091  output/action_reason_vocab.txt
+ed0acc8ec59417570eea441409447161  output/action_reason_vocab_200d.npy
+fc8f76661974da9da38d0129e32e743b  output/action_reason_vocab_200d.txt
+7a80cd63e7e5b5a1694e9ace4510b375  output/densecap_roi_features_test.npy
+06ee2292ff5d7c8cd3123fe8dc2d6e98  output/densecap_roi_features_train.npy
+e71d5ee025555c7023fd649960f788b3  output/densecap_test.json
+0c5eca4e60ede2d8747e65a4b11865be  output/densecap_train.json
+d8e28f23ced3b6fe28f6e62f650ff126  output/densecap_vocab.txt
+b4d91bdcf1e1ae6b7da0f9835273e745  output/densecap_vocab_200d.npy
+aaf569fa4aae865dce0573cd2ec2714a  output/densecap_vocab_200d.txt
+61834cf3b3789fe56c8742d457e66818  output/img_features_test.npy
+44fc423c6c4408f9dac4224b0c1a0ad0  output/img_features_train.npy
+ffda0d73098391eeac856331dec0cf9f  output/roi_features_test.npy
+89ba7436bbc00469825bcb7e5168d9cc  output/roi_features_train.npy
+e1e274f66de34a7e2848a823d8a9a7cd  output/symbol_box_test.json
+55149b62b1c8a60c28b7f79f2a4595c9  output/symbol_box_train.json
+9736646352537f6b46d1c8aa2405113a  output/symbol_test.json
+a47b142e4924546ad5fd0867c544ad60  output/symbol_train.json
+2a9fe9bdf5ac9b71143db5fd30284bd1  output/symbol_vocab.txt
+e19a978cb9234f55b14e1dbb44fcbd2a  output/symbol_vocab_200d.npy
+ec781897fa8d585773e2cc4cf81e6a64  output/symbol_vocab_200d.txt
+```
+
+## Training and evaluation
+The last thing that one need to do before training the model is to compile the
+protobuf files. Go to the ROOT directory of ADVISE repository and execute:
+```
+protoc protos/*.proto --python_out=.
+```
+To train the toy VSE model, one can simply execute:
+```
+sh train.sh
+```
+The tensorflow program shall generate human-readable log in the directory of
+"log" and tensorboard log in the directory of "logs". To monitor the training
+process, one simply use the tensorboard command:
+```
+tensorboard --logdir logs --port 8001
+```
+Then open <a href="http://127.0.0.1:8001">http://127.0.0.1:8001</a> in the web 
+browser to see the training progress. The final results (JSON format) will be
+stored in the directory "saved_results".
+
+<img src="docs/tensorboard.png" alt="tensorboard" height=200>
+
+
+## Results
+We now report our experimental results on our held-out validation set (10,000 
+images from the training set).
+
+| Method        | Config file     | Accuracy | RankMin  |  RankAvg  | RankMed  |
+| ------------- |:---------------:| --------:| --------:|  --------:| --------:|
+| VSE++         | vse++.pbtxt     | 0.6660   | 1.734    |  3.858    | 3.614    |
+| ADVISE        | advise.kb.pbtxt | 0.7284   | 1.554    |  3.552    | 3.311    |
+
+This VSE++ model achieves a score of 0.62 in the challenge, and the ADVISE model
+achieves a score of 0.69 in the challenge.
 
 
 ## References
