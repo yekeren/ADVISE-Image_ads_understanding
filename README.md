@@ -90,8 +90,8 @@ using <a href="http://localhost:8009/symbol_box.html">http://localhost:8009/symb
 or <a href="http://localhost:8009/densecap_box.html">http://localhost:8009/densecap_box.html</a>.
 You shall see results similar to:
 
-<img src="docs/symbol_box.png" alt="symbol box" height=300>
-<img src="docs/densecap_box.png" alt="densecap box" height=300>
+<img src="docs/symbol_box.png" alt="symbol box" height=250>
+<img src="docs/densecap_box.png" alt="densecap box" height=250>
 
 * After executing the "prepare_data.sh", you could check the md5 of all the
 generated files. Go back to the ROOT directory, then process the following
@@ -142,7 +142,7 @@ Then open <a href="http://127.0.0.1:8001">http://127.0.0.1:8001</a> in the web
 browser to see the training progress. The final results (JSON format) will be
 stored in the directory "saved_results".
 
-<img src="docs/tensorboard.png" alt="tensorboard" height=200>
+<img src="docs/tensorboard.png" alt="tensorboard" height=300>
 
 
 ## Results
