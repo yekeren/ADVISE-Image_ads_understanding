@@ -102,7 +102,8 @@ using <a href="http://localhost:8009/symbol_box.html">http://localhost:8009/symb
 or <a href="http://localhost:8009/densecap_box.html">http://localhost:8009/densecap_box.html</a>.
 You shall see results similar to:
 
-![symbol box visualizationtext][symbol_box | width=200] ![densecap box visualizationtext][densecap_box | width=200]
+![symbol box visualizationtext][symbol_box | width=200] 
+![densecap box visualizationtext][densecap_box | width=200]
 
 [symbol_box]: https://github.com/yekeren/ADVISE/blob/master/docs/symbol_box.png "Logo Title Text 2"
 [densecap_box]: https://github.com/yekeren/ADVISE/blob/master/docs/densecap_box.png "Logo Title Text 2"
