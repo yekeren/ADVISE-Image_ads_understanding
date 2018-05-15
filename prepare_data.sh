@@ -26,7 +26,8 @@ if [ ! -f "data/README.txt" ]; then
     -O "data/test-set.zip" \
     || exit -1
   
-  cd "data" && unzip "test-set.zip"
+  cd "data" && unzip -q "test-set.zip" || exit -1
+  cd -
   
   rm -rf /tmp/cookies.txt
   #rm "data/test-set.zip"
@@ -52,7 +53,26 @@ test -d "object_detection" \
   || ln -s "tensorflow_models/research/object_detection" . \
   || exit -1
 
+###############################################################
+# Download the GloVe model and the Inception V4 model.
+###############################################################
+mkdir -p "zoo"
+if [ ! -f "zoo/glove.6B.200d.txt" ]; then
+  wget -O "zoo/glove.6B.zip" \
+    "http://nlp.stanford.edu/data/glove.6B.zip" \
+    || exit -1
 
+  cd "zoo" && unzip -q "glove.6B.zip" || exit -1
+  cd -
+fi
+
+if [ ! -f "zoo/inception_v4.ckpt" ]; then
+  wget -O "zoo/inception_v4_2016_09_09.tar.gz" \
+    "http://download.tensorflow.org/models/inception_v4_2016_09_09.tar.gz" \
+    || exit -1
+  cd "zoo" && tar xzvf "inception_v4_2016_09_09.tar.gz" || exit -1
+  cd -
+fi
 
 ###############################################################
 # Prepare the symbol data, using the 53-symbols ontology.
