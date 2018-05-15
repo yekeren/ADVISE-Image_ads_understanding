@@ -137,8 +137,8 @@ process, one simply use the tensorboard command:
 tensorboard --logdir logs --port 8001
 ```
 Then open <a href="http://127.0.0.1:8001">http://127.0.0.1:8001</a> in the web 
-browser to see the training progress. The final results (JSON format) will be
-stored in the directory "saved_results".
+browser to see the training progress. The final results (JSON format) required
+by the challenge will be stored in the directory "saved_results".
 
 <img src="docs/tensorboard.png" alt="tensorboard" height=300>
 
