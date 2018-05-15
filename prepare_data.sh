@@ -32,8 +32,6 @@ if [ ! -f "data/README.txt" ]; then
   #rm "data/test-set.zip"
 fi
 
-exit 0
-
 ###############################################################
 # Clone the repository of tensorflow models.
 # We need:
