@@ -30,7 +30,7 @@ if [ ! -f "data/README.txt" ]; then
   cd -
   
   rm -rf /tmp/cookies.txt
-  #rm "data/test-set.zip"
+  rm "data/test-set.zip"
 fi
 
 ###############################################################
@@ -63,6 +63,7 @@ if [ ! -f "zoo/glove.6B.200d.txt" ]; then
     || exit -1
 
   cd "zoo" && unzip -q "glove.6B.zip" || exit -1
+  rm "glove.6B.zip"
   cd -
 fi
 
@@ -71,6 +72,7 @@ if [ ! -f "zoo/inception_v4.ckpt" ]; then
     "http://download.tensorflow.org/models/inception_v4_2016_09_09.tar.gz" \
     || exit -1
   cd "zoo" && tar xzvf "inception_v4_2016_09_09.tar.gz" || exit -1
+  rm "inception_v4_2016_09_09.tar.gz"
   cd -
 fi
 
