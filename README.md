@@ -52,33 +52,61 @@ Disk space > 20G (in order to store the downloaded images and intermediate files
 git clone https://github.com/yekeren/ADVISE.git
 ```
 
-* Enter the local directory.
+* Enter the ROOT of the local directory.
 ```
 cd ADVISE
 ```
 
-* Prepare the PITT Ads Dataset and pre-trained models.
+* Prepare the PITT Ads Dataset and pre-trained models. This step shall take 
+a long time to proceed (3-4 hours in our enviroments using GPU). The 
+"prepare\_data.sh" script shall guide you to to:
+
+      - Download the PITT Ads Dataset (>= 11G)
+      - Clone the "tensorflow/models" repository, in which we use the
+      object\_detection API and the InceptionV4 slim model.
+      - Download the pre-trained GloVe model.
+      - Download the pre-traind InceptionV4 model.
+      - Prepare the vocabulary and initial embedding matrix of the action-reason 
+      annotations of the ads data.
+      - Prepare the vocabulary and initial embedding matrix of the DenseCap
+      annotations.
+      - Prepare the vocabulary and initial embedding matrix of the ads symbols.
+      - Extract both the image features and the regional features using
+      InceptionV4 model. Note that we provide two types of region proposals. 
+      <a href="output/symbol_box_test.json">One</a> extracted using the tensorflow
+      object detection API (we trained the model on ads symbol boxes by ourselves), 
+      and <a href="output/densecap_test.json">the other</a> extracted using the 
+      DenseCap model. You could also provide region proposals extracted by 
+      yourselves and encode them using the same JSON format. Note: it is not 
+      necessary to extract features using both of the two region proposals. 
+      So you can comment out either the symbol box or the densecap box 
+      ("prepare_data.sh" line 144-166).
+
+
 ```
 sh prepare_data.sh
 ```
-This step shall take a long time to proceed. The "prepare\_data.sh" script 
-shall guide you to to:
-  - Download the PITT Ads Dataset (>= 11G)
-  - Clone the "tensorflow/models" repository, in which we use the
-  object\_detection API and the InceptionV4 slim model.
-  - Download the pre-trained GloVe model.
-  - Download the pre-traind InceptionV4 model.
-  - Prepare the vocabulary and initial embedding matrix of the action-reason 
-  annotations of the ads data.
-  - Prepare the vocabulary and initial embedding matrix of the DenseCap
-  annotations.
-  - Prepare the vocabulary and initial embedding matrix of the ads symbols.
-  - Extract both the image features and the regional features using
-  InceptionV4 model. Note that we provide two types of region proposals. 
-  <a href="output/symbol_box_test.json">One</a> extracted using the tensorflow
-  object detection API (we trained the model on ads symbol boxes by ourselves), 
-  and <a href="output/densecap_test.json">the other</a> extracted using the 
-  DenseCap model.
+
+* If you want to provide region proposals extracted by yourselves. You can 
+still use the visualization tools provided by us:
+```
+cd visualization/data
+ln -s ../../output/densecap_test.json .
+ln -s ../../output/symbol_box_test.json .
+ln -s ../../data/test_images/ ./images
+cd ..
+python -m SimpleHTTPServer 8009
+```
+Then checkout the contents from your web browswer
+using <a href="http://localhost:8009/symbol_box.html">http://localhost:8009/symbol_box.html</a>
+or <a href="http://localhost:8009/densecap_box.html">http://localhost:8009/densecap_box.html</a>.
+
+Reference-style: 
+![alt text][symbol_box]
+
+[symbol_box]: https://github.com/yekeren/ADVISE/blob/master/docs/symbol_box.png "Logo Title Text 2"
+[densecap_box]: https://github.com/yekeren/ADVISE/blob/master/docs/densecap_box.png "Logo Title Text 2"
+
 
 ## References
 Finally, special thanks to these authors, our implementation mainly depends 
