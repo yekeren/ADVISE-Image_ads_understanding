@@ -1,0 +1,86 @@
+<html>
+  <head>
+    <style>
+    #over { font-size:5em; position:absolute; top:43px; left:7px; z-index:2; pointer-events:none }
+    </style>
+  </head>
+  <body>
+    <div id="imageID"></div>
+    <button type="button" onclick="refresh()">Refresh!</button>
+    <div><img id="imagePath" src="" height="640px" width="640px" /></div>
+    <div id="over">
+      <canvas id="canvas" width="640" height="640" style="border:1px solid #aaaaaa;">
+        Your browser does not support the HTML5 canvas tag.
+      </canvas>
+    </div>
+  </body>
+</html>
+
+<script language="Javascript">
+  function readMetaInfo(path) {
+    var request = new XMLHttpRequest();
+    request.open("GET", path, false);
+    request.send(null);
+    return annoDict = JSON.parse(request.responseText);
+  }
+
+  var annoDict = readMetaInfo("data/symbol_box_test.json");
+  var imageIDs = Object.keys(annoDict);
+
+  function urldecode(url) {
+    return decodeURIComponent(url.replace(/\+/g, ' '));
+  }
+  
+  function gup(name) {
+    var regexS = "[\\?&]" + name + "=([^&#]*)";
+    var regex = new RegExp( regexS );
+    var tmpURL = window.location.href;
+    var results = regex.exec( tmpURL );
+    if (results == null) {
+      return imageIDs[0];
+    } else {
+      return urldecode(results[1]);
+    }
+  }
+
+  var index = 0;
+  function refresh() {
+    var imageID = imageIDs[index];
+    if (index < imageIDs.length - 1) {
+      index += 1;
+    }
+
+    document.getElementById("imageID").innerHTML = imageID;
+    document.getElementById("imagePath").src = 'data/images/' + imageID;
+
+    var canvas = document.getElementById("canvas");
+    var w = canvas.width;
+    canvas.width = 1;
+    canvas.width = w;
+
+    var context = canvas.getContext("2d");
+
+    var fontHeight = 15;
+    context.font = '15px Calibri';
+    context.lineWidth = "4";
+    context.fillStyle = 'lime';
+    context.strokeStyle = "lime";
+
+    context.rect(0, 0, 640, 640);
+
+    var anno = annoDict[imageID];
+    for (var i = 0; i < anno.regions.length; ++i) {
+      var region = anno.regions[i];
+      var x1 = region.bbox.xmin * 640;
+      var y1 = region.bbox.ymin * 640;
+      var x2 = region.bbox.xmax * 640;
+      var y2 = region.bbox.ymax * 640;
+      context.rect(x1, y1, x2 - x1, y2 - y1);
+      context.fillText(region.name + ':' + region.score, x1, y1 + fontHeight);
+    }
+    console.log(anno);
+    context.stroke();
+  }
+
+  refresh();
+</script>
