@@ -180,6 +180,10 @@ and VQA." arXiv preprint arXiv:1707.07998 (2017).
 Teney, Damien, et al. "Tips and Tricks for Visual Question Answering: Learnings
 from the 2017 Challenge." arXiv preprint arXiv:1708.02711 (2017).
 
+Pennington, Jeffrey, Richard Socher, and Christopher Manning. "Glove: Global
+vectors for word representation." Proceedings of the 2014 conference on
+empirical methods in natural language processing (EMNLP). 2014.
+
 Johnson, Justin, Andrej Karpathy, and Li Fei-Fei. "Densecap: Fully convolutional
 localization networks for dense captioning." IEEE CVPR. 2016.
 
