@@ -145,7 +145,10 @@ by the challenge will be stored in the directory "saved_results".
 
 ## Results
 We now report our experimental results on our held-out validation set (10,000 
-images from the training set).
+images from the training set). We also enclosed results using LSTM and
+bi-directional LSTM to encode the action-reason statement for VSE++. We may
+achieve improved performance if we encode sentences in reverse order for
+VSE++.lstm.
 
 | Method        | Config file        | Accuracy | RankMin  |  RankAvg  | RankMed  |
 | ------------- |:------------------:| --------:| --------:|  --------:| --------:|
