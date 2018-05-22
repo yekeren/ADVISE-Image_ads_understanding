@@ -147,10 +147,12 @@ by the challenge will be stored in the directory "saved_results".
 We now report our experimental results on our held-out validation set (10,000 
 images from the training set).
 
-| Method        | Config file     | Accuracy | RankMin  |  RankAvg  | RankMed  |
-| ------------- |:---------------:| --------:| --------:|  --------:| --------:|
-| VSE++         | vse++.pbtxt     | 0.6660   | 1.734    |  3.858    | 3.614    |
-| ADVISE        | advise.kb.pbtxt | 0.7284   | 1.554    |  3.552    | 3.311    |
+| Method        | Config file        | Accuracy | RankMin  |  RankAvg  | RankMed  |
+| ------------- |:------------------:| --------:| --------:|  --------:| --------:|
+| VSE++         | vse++.pbtxt        | 0.6660   | 1.734    |  3.858    | 3.614    |
+| VSE++.lstm    | vse++.lstm.pbtxt   | 0.6602   | 1.748    |  3.753    | 3.556    |
+| VSE++.bilstm  | vse++.bilstm.pbtxt | 0.6716   | 1.712    |  3.731    | 3.519    |
+| ADVISE        | advise.kb.pbtxt    | 0.7284   | 1.554    |  3.552    | 3.311    |
 
 This VSE++ model achieves a score of 0.62 in the challenge, and the ADVISE model
 achieves a score of 0.69 in the challenge.
