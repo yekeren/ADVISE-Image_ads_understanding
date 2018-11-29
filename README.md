@@ -23,8 +23,9 @@ We provide both the baseline <a href="configs/vse++.pbtxt">VSE</a> model and
 our <a href="configs/advise.kb.pbtxt">ADVISE</a> model in this repository.
 If you are using our implementation, please cite our paper:
 ```
-Ye, Keren, and Adriana Kovashka. "ADVISE: Symbolism and External Knowledge for
-Decoding Advertisements." arXiv preprint arXiv:1711.06666 (2017).
+Ye, Keren, and Adriana Kovashka.
+"ADVISE: Symbolism and External Knowledge for Decoding Advertisements." 
+Proceedings of the European Conference on Computer Vision (ECCV), September 2018.
 
 @InProceedings{Ye_2018_ECCV,
 author = {Ye, Keren and Kovashka, Adriana},
