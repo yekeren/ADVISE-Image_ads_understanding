@@ -25,8 +25,16 @@ If you are using our implementation, please cite our paper:
 ```
 Ye, Keren, and Adriana Kovashka. "ADVISE: Symbolism and External Knowledge for
 Decoding Advertisements." arXiv preprint arXiv:1711.06666 (2017).
+
+@InProceedings{Ye_2018_ECCV,
+author = {Ye, Keren and Kovashka, Adriana},
+title = {ADVISE: Symbolism and External Knowledge for Decoding Advertisements},
+booktitle = {The European Conference on Computer Vision (ECCV)},
+month = {September},
+year = {2018}
+}
 ```
-\[[link](https://arxiv.org/pdf/1711.06666.pdf)\]\[[bibtex](https://scholar.googleusercontent.com/scholar.bib?q=info:K2QWc_pL9-YJ:scholar.google.com/&output=citation&scisig=AAGBfm0AAAAAWvsX4yeW9FRFUealOfUsxcfTEzOL2F4A&scisf=4&ct=citation&cd=-1&hl=en)\]
+\[[link](http://openaccess.thecvf.com/content_ECCV_2018/papers/Keren_Ye_ADVISE_Symbolism_and_ECCV_2018_paper.pdf)\]
 
 ## Prerequisites
 Tensorflow >= version 1.6
