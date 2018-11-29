@@ -22,11 +22,8 @@ improve the final performance especially for the public service announcements
 We provide both the baseline <a href="configs/vse++.pbtxt">VSE</a> model and 
 our <a href="configs/advise.kb.pbtxt">ADVISE</a> model in this repository.
 If you are using our implementation, please cite our paper:
+\[[link](http://openaccess.thecvf.com/content_ECCV_2018/papers/Keren_Ye_ADVISE_Symbolism_and_ECCV_2018_paper.pdf)\]
 ```
-Ye, Keren, and Adriana Kovashka.
-"ADVISE: Symbolism and External Knowledge for Decoding Advertisements." 
-Proceedings of the European Conference on Computer Vision (ECCV), September 2018.
-
 @InProceedings{Ye_2018_ECCV,
 author = {Ye, Keren and Kovashka, Adriana},
 title = {ADVISE: Symbolism and External Knowledge for Decoding Advertisements},
@@ -35,7 +32,6 @@ month = {September},
 year = {2018}
 }
 ```
-\[[link](http://openaccess.thecvf.com/content_ECCV_2018/papers/Keren_Ye_ADVISE_Symbolism_and_ECCV_2018_paper.pdf)\]
 
 ## Prerequisites
 Tensorflow >= version 1.6
